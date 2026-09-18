@@ -1,11 +1,12 @@
 # Cobble_Project
 
-##Architecture Breakdown##
+**Architecture Breakdown**
 - Frontend (Docker container 1): Built with React/HTML. It presents the user interface and communicates back and forth with the backend API
 - Backend (Docker container 2): Powered by Python and includes Swagger UI for API documentation and testing. It handles business logic and communicates between the UI and database.
 - Database (Docker container 3): Structured using a SQL schema. The Python backend reads and writes data to and from these database tables.
 
-##Scope & Deliverables##
+
+**Scope & Deliverables**
 - Deliverable Goal: Week 13 Proof of Concept for the Cobble_Project
 - Core Requirements: Built a plugin that cycles through the architecture to handle:
   1. Fetching and displaying a single thread of comments from the SQL database.
