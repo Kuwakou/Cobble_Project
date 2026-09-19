@@ -1,0 +1,18 @@
+/* Cobble CSS Tokens
+   Source: Cobble CSS Tokens Reference v4.12 */
+:root {
+  --cobble-color-primary:   #2f6f8f;
+  --cobble-color-secondary: #4fa3c7;
+  --cobble-color-bg:        #f5f7f9;
+  --cobble-color-text:      #1f2933;
+
+  --cobble-spacing-sm: 8px;
+  --cobble-spacing-md: 16px;
+  --cobble-spacing-lg: 24px;
+
+  --cobble-font-base: 'Segoe UI', Arial, sans-serif;
+}
+
+.cobble-header {
+  font-size: 1.5rem;
+}
