@@ -1,28 +1,23 @@
-import express from "express";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const PORT      = process.env.PORT || 8080;
-const API_BASE  = process.env.API_BASE_URL || "http://api:8080";
+// Thin UI static server. Serves pre-built static files and a tiny
+// generated config.js so the browser knows where the API lives — this
+// process itself never talks to SQL, only the browser -> API.
+const express = require("express");
+const path = require("path");
 
 const app = express();
+const PORT = process.env.PORT || 3000;
+// Browser-reachable API base. Container-to-container calls use the
+// service name "api", but the browser runs on the host, so it needs the
+// host-published port.
+const API_BASE_URL = process.env.API_BASE_URL || "http://localhost:8080";
 
-// Server-side proxy. The browser calls same-origin /api/health; this process
-// forwards to the API by its Docker service name. No CORS, and no localhost
-// between containers (§3).
-app.get("/api/health", async (_req, res) => {
-  try {
-    const upstream = await fetch(`${API_BASE}/health`);
-    const body     = await upstream.text();
-    res.status(upstream.status).type("application/json").send(body);
-  } catch (err) {
-    res.status(502).json({ status: "unreachable", error: String(err) });
-  }
+app.get("/config.js", (_req, res) => {
+  res.type("application/javascript");
+  res.send(`window.API_BASE_URL = ${JSON.stringify(API_BASE_URL)};`);
 });
 
-app.use(express.static(path.join(__dirname, "dist")));
+app.use(express.static(path.join(__dirname, "src")));
 
-app.listen(PORT, () =>
-  console.log(`Cobble UI listening on ${PORT}, upstream ${API_BASE}`)
-);
+app.listen(PORT, () => {
+  console.log(`discussion-thread ui listening on :${PORT}, API_BASE_URL=${API_BASE_URL}`);
+});

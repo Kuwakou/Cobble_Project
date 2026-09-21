@@ -1,16 +1,11 @@
 {
-  "name": "cobble-ui",
-  "version": "1.0.0",
+  "name": "discussion-thread-ui",
+  "version": "0.1.0",
   "private": true,
-  "type": "module",
   "scripts": {
-    "build": "esbuild src/main.js --bundle --minify --outfile=dist/main.js && cp src/index.html src/tokens.css dist/",
     "start": "node server.js"
   },
   "dependencies": {
     "express": "^4.19.2"
-  },
-  "devDependencies": {
-    "esbuild": "^0.23.0"
   }
 }

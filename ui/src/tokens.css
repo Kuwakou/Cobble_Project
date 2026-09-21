@@ -1,18 +1,101 @@
-/* Cobble CSS Tokens
-   Source: Cobble CSS Tokens Reference v4.12 */
+/* Cobble CSS tokens — placeholder set, applied structurally per the
+   team plan. Swap values for the real design-system tokens later. */
 :root {
-  --cobble-color-primary:   #2f6f8f;
-  --cobble-color-secondary: #4fa3c7;
-  --cobble-color-bg:        #f5f7f9;
-  --cobble-color-text:      #1f2933;
+  --cobble-color-bg: #0f1115;
+  --cobble-color-surface: #171a21;
+  --cobble-color-text: #f2f3f5;
+  --cobble-color-muted: #9aa0ab;
+  --cobble-color-primary: #4f7cff;
+  --cobble-color-success: #2fb673;
+  --cobble-color-danger: #e5534b;
 
-  --cobble-spacing-sm: 8px;
-  --cobble-spacing-md: 16px;
-  --cobble-spacing-lg: 24px;
+  --cobble-space-xs: 4px;
+  --cobble-space-sm: 8px;
+  --cobble-space-md: 16px;
+  --cobble-space-lg: 24px;
 
-  --cobble-font-base: 'Segoe UI', Arial, sans-serif;
+  --cobble-radius-md: 8px;
+  --cobble-font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
-.cobble-header {
-  font-size: 1.5rem;
+body {
+  margin: 0;
+  font-family: var(--cobble-font-family);
+  background: var(--cobble-color-bg);
+  color: var(--cobble-color-text);
+}
+
+.card {
+  background: var(--cobble-color-surface);
+  border-radius: var(--cobble-radius-md);
+  padding: var(--cobble-space-lg);
+  max-width: 560px;
+  margin: 48px auto;
+}
+
+.thread-id {
+  color: var(--cobble-color-muted);
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.status-fail { color: var(--cobble-color-danger); }
+.empty { color: var(--cobble-color-muted); }
+
+.comment-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cobble-space-sm);
+  margin: var(--cobble-space-md) 0;
+}
+
+.comment-row {
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: var(--cobble-radius-md);
+  padding: var(--cobble-space-sm) var(--cobble-space-md);
+}
+
+.comment-meta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--cobble-color-muted);
+  margin-bottom: 4px;
+}
+
+.comment-author { font-weight: 600; color: var(--cobble-color-text); }
+
+.comment-body { white-space: pre-wrap; }
+
+.btn-delete {
+  margin-top: var(--cobble-space-xs);
+  background: transparent;
+  color: var(--cobble-color-danger);
+  border: 1px solid var(--cobble-color-danger);
+  border-radius: var(--cobble-radius-md);
+  padding: 2px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.btn-delete:hover { background: var(--cobble-color-danger); color: white; }
+
+.add-form {
+  display: flex;
+  gap: var(--cobble-space-sm);
+}
+.add-form input {
+  flex: 1;
+  padding: var(--cobble-space-sm);
+  border-radius: var(--cobble-radius-md);
+  border: 1px solid var(--cobble-color-muted);
+  background: var(--cobble-color-bg);
+  color: var(--cobble-color-text);
+}
+.btn-add {
+  background: var(--cobble-color-primary);
+  color: white;
+  border: none;
+  border-radius: var(--cobble-radius-md);
+  padding: var(--cobble-space-sm) var(--cobble-space-md);
+  cursor: pointer;
 }
