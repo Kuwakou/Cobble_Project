@@ -1,0 +1,65 @@
+{
+  "info": {
+    "name": "Discussion Thread PoC",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://localhost:8080" },
+    { "key": "threadId", "value": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" },
+    { "key": "commentId", "value": "" }
+  ],
+  "item": [
+    {
+      "name": "GET comments (success)",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/threads/{{threadId}}/comments"
+      }
+    },
+    {
+      "name": "POST comment (success)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"body\": \"Created from Postman\"\n}"
+        },
+        "url": "{{baseUrl}}/threads/{{threadId}}/comments"
+      }
+    },
+    {
+      "name": "POST comment (failure — empty body)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"body\": \"\"\n}"
+        },
+        "url": "{{baseUrl}}/threads/{{threadId}}/comments"
+      }
+    },
+    {
+      "name": "DELETE comment (success)",
+      "request": {
+        "method": "DELETE",
+        "url": "{{baseUrl}}/threads/{{threadId}}/comments/{{commentId}}"
+      }
+    },
+    {
+      "name": "DELETE comment (failure — not found / already deleted)",
+      "request": {
+        "method": "DELETE",
+        "url": "{{baseUrl}}/threads/{{threadId}}/comments/00000000-0000-0000-0000-000000000000"
+      }
+    },
+    {
+      "name": "GET comments — cross-tenant thread (should be empty per app-level tenant, informational)",
+      "request": {
+        "method": "GET",
+        "url": "{{baseUrl}}/threads/bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb/comments"
+      }
+    }
+  ]
+}
