@@ -1,24 +1,16 @@
-# ---------- build stage ----------
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
-WORKDIR /src
+FROM python:3.11-slim
 
-COPY Cobble.Api.csproj .
-RUN dotnet restore
-
-COPY . .
-RUN dotnet publish -c Release -o /app/publish --no-restore
-
-# ---------- runtime stage ----------
-FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
 WORKDIR /app
 
-RUN apt-get update \
- && apt-get install -y --no-install-recommends curl \
- && rm -rf /var/lib/apt/lists/*
+# pymssql wheels bundle FreeTDS, but build deps are still needed on slim.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc curl \
+    && rm -rf /var/lib/apt/lists/*
 
-COPY --from=build /app/publish .
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
-USER $APP_UID
+COPY app ./app
 
 EXPOSE 8080
-ENTRYPOINT ["dotnet", "Cobble.Api.dll"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
