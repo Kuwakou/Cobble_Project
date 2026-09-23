@@ -4,7 +4,7 @@ these come from JWT claims once auth is wired; until then they are
 hard-coded constants so nothing above this layer has to be refactored
 later. Never accept tenantId / authorMemberId from the request body.
 
-These match the seed data in db/init.sql.
+These match the seed data in sql/init/init.sql.
 """
 
 DEFAULT_TENANT_ID = "11111111-1111-1111-1111-111111111111"

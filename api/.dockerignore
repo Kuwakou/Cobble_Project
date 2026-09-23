@@ -1,7 +1,3 @@
-bin/
-obj/
-**/bin/
-**/obj/
-.vs/
-.vscode/
-*.user
+__pycache__/
+*.pyc
+.venv/

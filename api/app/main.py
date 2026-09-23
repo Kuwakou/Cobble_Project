@@ -18,8 +18,8 @@ app = FastAPI(
     version="0.1.0",
 )
 
-# The UI is served from a different origin (localhost:3000) than the API
-# (localhost:8080); browsers block cross-origin fetches by default.
+# The UI is served from a different origin (localhost:8080) than the API
+# (localhost:8081); browsers block cross-origin fetches by default.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
