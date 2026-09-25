@@ -72,3 +72,9 @@ def delete_comment(tenant_id: str, member_id: str, comment_id: str):
         "dsc.Comments_Delete_JSON", (tenant_id, member_id, comment_id)
     )
     return result or {"deleted": 0}
+
+def update_comment(tenant_id: str, member_id: str, thread_id: str, comment_id: str, body_json: str):
+    return _exec_json_proc(
+        "dsc.Comments_Update_JSON", (tenant_id, member_id, thread_id, comment_id, body_json)
+    )
+

@@ -132,6 +132,35 @@ BEGIN
 END;
 GO
 
+CREATE OR ALTER PROCEDURE dsc.Comments_Update_JSON
+    @TenantId UNIQUEIDENTIFIER, @MemberId UNIQUEIDENTIFIER,
+    @ThreadId UNIQUEIDENTIFIER, @CommentId UNIQUEIDENTIFIER, @Input NVARCHAR(MAX)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    IF ISJSON(@Input) <> 1 THROW 50001, 'Input is not valid JSON.', 1;
+    DECLARE @Body NVARCHAR(MAX) = JSON_VALUE(@Input, '$.body');
+    IF @Body IS NULL OR LTRIM(RTRIM(@Body)) = '' THROW 50002, 'body is required.', 1;
+
+    DECLARE @Owner UNIQUEIDENTIFIER = (
+        SELECT AuthorMemberId FROM dsc.Comments
+        WHERE TenantId = @TenantId AND ThreadId = @ThreadId AND CommentId = @CommentId AND IsDeleted = 0
+    );
+
+    IF @Owner IS NULL THROW 50004, 'Comment not found.', 1;
+    IF @Owner <> @MemberId THROW 50005, 'Only the author can update their comment.', 1;
+
+    UPDATE dsc.Comments SET Body = @Body
+    WHERE TenantId = @TenantId AND ThreadId = @ThreadId AND CommentId = @CommentId AND IsDeleted = 0;
+
+    SELECT CommentId AS commentId, ThreadId AS threadId, TenantId AS tenantId,
+           AuthorMemberId AS authorMemberId, AuthorName AS authorName,
+           Body AS body, ParentCommentId AS parentCommentId, CreatedUtc AS createdUtc
+    FROM dsc.Comments WHERE TenantId = @TenantId AND CommentId = @CommentId
+    FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES;
+END;
+GO
+
 -- ---------------------------------------------------------------------
 -- Seed data — two tenants, one thread each, so the negative isolation
 -- test in Stage C has something to *not* return. Fixed, memorable GUIDs
