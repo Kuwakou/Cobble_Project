@@ -9,6 +9,11 @@
 --
 -- Output contract (same envelope as the membership procedures): one row, one column [json],
 --   {"ok":true,"data":<object|array>}  or  {"ok":false,"error":{"code":"...","message":"..."}}
+--
+-- Replies: one flat level only. A comment with ParentCommentId = NULL is top-level; a comment
+-- whose ParentCommentId points at another comment is a reply. Replies to a reply are rejected
+-- (usp_Comment_Add enforces that the parent is itself top-level) so the tree never nests past
+-- one level, matching the UI which only ever renders two tiers.
 USE Cobble398;
 GO
 SET QUOTED_IDENTIFIER ON;
@@ -19,6 +24,8 @@ GO
 -- Renders one comment as a JSON object, or NULL when the (TenantId, CommentId) pair
 -- does not exist / is deleted. Both keys are always required: this is the tenancy fence.
 -- createdUtc is emitted as ISO-8601 with an explicit Z, as agreed in the team contract.
+-- parentCommentId is always present (INCLUDE_NULL_VALUES) so the client never has to
+-- guess between "field missing" and "top-level comment".
 -------------------------------------------------------------------------------
 CREATE OR ALTER FUNCTION dsc.tvf_CommentJson (@TenantId UNIQUEIDENTIFIER, @CommentId UNIQUEIDENTIFIER)
 RETURNS TABLE
@@ -31,10 +38,11 @@ AS RETURN
                c.AuthorMemberId                            AS [authorMemberId],
                c.AuthorDisplayName                         AS [authorName],
                c.Body                                      AS [body],
+               c.ParentCommentId                            AS [parentCommentId],
                CONVERT(NVARCHAR(19), c.CreatedAt, 126) + 'Z' AS [createdUtc]
         FROM dsc.Comment c
         WHERE c.TenantId = @TenantId AND c.CommentId = @CommentId AND c.IsDeleted = 0
-        FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) AS [json]
+        FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES) AS [json]
 );
 GO
 
@@ -43,6 +51,8 @@ GO
 -- in : @TenantId, @ThreadId
 -- out: [ CommentDto, ... ]  (empty array when the thread has no live comments)
 --      not_found  when the thread does not exist IN THIS TENANT
+-- CommentDto.parentCommentId is null for a top-level comment, or the parent's
+-- commentId for a reply. The UI groups by this field client-side.
 -------------------------------------------------------------------------------
 CREATE OR ALTER PROCEDURE dsc.usp_Comment_List
     @TenantId UNIQUEIDENTIFIER,
@@ -61,19 +71,24 @@ BEGIN
                c.AuthorMemberId                            AS [authorMemberId],
                c.AuthorDisplayName                         AS [authorName],
                c.Body                                      AS [body],
+               c.ParentCommentId                            AS [parentCommentId],
                CONVERT(NVARCHAR(19), c.CreatedAt, 126) + 'Z' AS [createdUtc]
         FROM dsc.Comment c
         WHERE c.TenantId = @TenantId AND c.ThreadId = @ThreadId AND c.IsDeleted = 0
         ORDER BY c.CreatedAt, c.CommentId
-        FOR JSON PATH), N'[]')) AS [json];
+        FOR JSON PATH, INCLUDE_NULL_VALUES), N'[]')) AS [json];
 END
 GO
 
 -------------------------------------------------------------------------------
 -- dsc.usp_Comment_Add
 -- in : @TenantId, @AuthorMemberId, @AuthorDisplayName (all from the JWT),
---      @ThreadId, @Json = { "body": "string(1..2000)" }
--- out: CommentDto  |  not_found (thread) | validation
+--      @ThreadId, @Json = { "body": "string(1..2000)", "parentCommentId": "guid" | null }
+-- out: CommentDto  |  not_found (thread/parent) | validation
+--
+-- parentCommentId is optional. When present it must name a live comment in the SAME
+-- tenant and thread, and that comment must itself be top-level (ParentCommentId IS NULL) -
+-- this is what enforces "one flat level" and rejects a reply-to-a-reply.
 -------------------------------------------------------------------------------
 CREATE OR ALTER PROCEDURE dsc.usp_Comment_Add
     @TenantId          UNIQUEIDENTIFIER,
@@ -94,13 +109,24 @@ BEGIN
     IF @Body IS NULL OR LEN(@Body) = 0
         BEGIN SELECT dbo.fn_JsonError('validation', 'body is required (1-2000 characters).') AS [json]; RETURN; END
 
+    DECLARE @ParentCommentId UNIQUEIDENTIFIER = TRY_CONVERT(UNIQUEIDENTIFIER, JSON_VALUE(@Json, '$.parentCommentId'));
+
+    IF @ParentCommentId IS NOT NULL
+    BEGIN
+        IF NOT EXISTS (
+            SELECT 1 FROM dsc.Comment
+            WHERE TenantId = @TenantId AND ThreadId = @ThreadId AND CommentId = @ParentCommentId
+              AND IsDeleted = 0 AND ParentCommentId IS NULL)
+            BEGIN SELECT dbo.fn_JsonError('not_found', 'Parent comment not found, or is itself a reply.') AS [json]; RETURN; END
+    END
+
     DECLARE @Name NVARCHAR(100) = NULLIF(LTRIM(RTRIM(@AuthorDisplayName)), N'');
     IF @Name IS NULL SET @Name = N'Member';
 
     DECLARE @Ids TABLE (CommentId UNIQUEIDENTIFIER);
-    INSERT INTO dsc.Comment (TenantId, ThreadId, AuthorMemberId, AuthorDisplayName, Body)
+    INSERT INTO dsc.Comment (TenantId, ThreadId, AuthorMemberId, AuthorDisplayName, Body, ParentCommentId)
     OUTPUT inserted.CommentId INTO @Ids
-    VALUES (@TenantId, @ThreadId, @AuthorMemberId, @Name, @Body);
+    VALUES (@TenantId, @ThreadId, @AuthorMemberId, @Name, @Body, @ParentCommentId);
 
     DECLARE @CommentId UNIQUEIDENTIFIER = (SELECT TOP 1 CommentId FROM @Ids);
     SELECT dbo.fn_JsonOk([json]) AS [json] FROM dsc.tvf_CommentJson(@TenantId, @CommentId);
@@ -116,6 +142,9 @@ GO
 --
 -- NOTE for the team: authors may remove only their own comments. To let moderators remove any
 -- comment, add a @CanModerate BIT parameter and skip the ownership check when it is 1.
+-- NOTE: deleting a top-level comment does not cascade-delete its replies (the FK has no
+-- ON DELETE CASCADE) - the replies simply keep pointing at a now-hidden parent. That's an
+-- acceptable PoC-level gap; flag it if the team wants cascade behaviour later.
 -------------------------------------------------------------------------------
 CREATE OR ALTER PROCEDURE dsc.usp_Comment_Remove
     @TenantId       UNIQUEIDENTIFIER,

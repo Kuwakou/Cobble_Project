@@ -23,19 +23,46 @@
     const THREAD_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
     const API_BASE_URL = window.API_BASE_URL || "http://localhost:8080";
 
-    function CommentRow({ comment, onDelete }) {
+    function CommentRow({ comment, replies, onDelete, replyingTo, setReplyingTo, replyDraft, setReplyDraft, onReply }) {
+      const isReplying = replyingTo === comment.commentId;
       return (
         <div className="comment-row">
           <div className="comment-meta">
             <span className="comment-author">{comment.authorName}</span>
-            <span className="comment-time">
-              {new Date(comment.createdUtc).toLocaleString()}
-            </span>
+            <span className="comment-time">{new Date(comment.createdUtc).toLocaleString()}</span>
           </div>
           <div className="comment-body">{comment.body}</div>
-          <button className="btn-delete" onClick={() => onDelete(comment.commentId)}>
-            Delete
+          <button className="btn-delete" onClick={() => onDelete(comment.commentId)}>Delete</button>
+          <button className="btn-reply" onClick={() => setReplyingTo(isReplying ? null : comment.commentId)}>
+            {isReplying ? "Cancel" : "Reply"}
           </button>
+
+          {isReplying && (
+            <form className="reply-form" onSubmit={(e) => { e.preventDefault(); onReply(comment.commentId); }}>
+              <input
+                type="text"
+                placeholder="Write a reply…"
+                value={replyDraft}
+                onChange={(e) => setReplyDraft(e.target.value)}
+              />
+              <button type="submit" className="btn-add">Reply</button>
+            </form>
+          )}
+
+          {replies.length > 0 && (
+            <div className="reply-list">
+              {replies.map((r) => (
+                <div key={r.commentId} className="comment-row reply-row">
+                  <div className="comment-meta">
+                    <span className="comment-author">{r.authorName}</span>
+                    <span className="comment-time">{new Date(r.createdUtc).toLocaleString()}</span>
+                  </div>
+                  <div className="comment-body">{r.body}</div>
+                  <button className="btn-delete" onClick={() => onDelete(r.commentId)}>Delete</button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       );
     }
@@ -67,25 +94,43 @@
       useEffect(() => {
         load();
       }, [load]);
-
-      const addComment = (e) => {
-        e.preventDefault();
-        if (!draft.trim()) return;
-        fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ body: draft }),
+      
+    const postComment = (body, parentCommentId) => {
+      fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body, parentCommentId: parentCommentId ?? null }),
+      })
+        .then((res) => {
+          if (!res.ok) throw new Error(`POST failed: ${res.status}`);
+          return res.json();
         })
-          .then((res) => {
-            if (!res.ok) throw new Error(`POST failed: ${res.status}`);
-            return res.json();
-          })
-          .then(() => {
-            setDraft("");
-            load();
-          })
+        .then(() => load())
           .catch((err) => setError(err.message));
-      };
+        };
+      
+        const submitComment = (e) => {
+          e.preventDefault();
+          if (!draft.trim()) return;
+          postComment(draft);
+          setDraft("");
+        };
+
+      
+      const topLevel = comments.filter((c) => !c.parentCommentId);
+      const repliesByParent = {};
+      for (const c of comments) {
+        if (c.parentCommentId) {
+        (repliesByParent[c.parentCommentId] ??= []).push(c);
+          }
+        }
+      
+
+      const [replyingTo, setReplyingTo] = useState(null); // commentId or null
+      const [replyDraft, setReplyDraft] = useState("");
+      
+      
+    
 
       const deleteComment = (commentId) => {
         fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments/${commentId}`, {
@@ -107,17 +152,27 @@
 
           {status === "loading" && <p>Loading…</p>}
           {status === "error" && <p className="status-fail">Error: {error}</p>}
-
+          
           <div className="comment-list">
-            {comments.map((c) => (
-              <CommentRow key={c.commentId} comment={c} onDelete={deleteComment} />
+            {topLevel.map((c) => (
+              <CommentRow
+                key={c.commentId}
+                comment={c}
+                replies={repliesByParent[c.commentId] || []}
+                onDelete={deleteComment}
+                replyingTo={replyingTo}
+                setReplyingTo={setReplyingTo}
+                replyDraft={replyDraft}
+                setReplyDraft={setReplyDraft}
+                onReply={(parentId) => postComment(replyDraft, parentId)}
+              />
             ))}
             {status === "ready" && comments.length === 0 && (
               <p className="empty">No comments yet.</p>
             )}
           </div>
 
-          <form className="add-form" onSubmit={addComment}>
+          <form className="add-form" onSubmit={submitComment}>
             <input
               type="text"
               placeholder="Add a comment…"
@@ -130,7 +185,11 @@
       );
     }
 
-    ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+    ReactDOM.createRoot(document.getElementById("root")).render(
+      <React.StrictMode>
+        <App />
+      </React.StrictMode>
+    );
   </script>
 </body>
 </html>

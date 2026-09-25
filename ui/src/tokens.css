@@ -49,6 +49,35 @@ body {
   margin: var(--cobble-space-md) 0;
 }
 
+.reply-list { 
+  margin-left: var(--cobble-space-lg); 
+  margin-top: var(--cobble-space-sm); 
+  display: flex; 
+  flex-direction: column; 
+  gap: var(--cobble-space-xs); 
+}
+
+.reply-row { 
+  background: rgba(255,255,255,0.05); 
+}
+
+.reply-form { 
+  display: flex; 
+  gap: var(--cobble-space-sm); 
+  margin-top: var(--cobble-space-xs); 
+}
+
+.btn-reply { 
+  margin-top: var(--cobble-space-xs); 
+  margin-left: 6px; 
+  background: transparent; 
+  color: var(--cobble-color-primary); 
+  border: 1px solid var(--cobble-color-primary); 
+  border-radius: var(--cobble-radius-md); 
+  padding: 2px 8px; font-size: 12px; 
+  cursor: pointer; 
+}
+
 .comment-row {
   background: rgba(255, 255, 255, 0.03);
   border-radius: var(--cobble-radius-md);

@@ -71,6 +71,42 @@ END
 GO
 
 -------------------------------------------------------------------------------
+-- Reply support: a comment may optionally point at another comment in the
+-- same thread as its parent. NULL = top-level comment. Only one level of
+-- nesting is supported (a reply's own ParentCommentId must be NULL) - that
+-- rule is enforced in dsc.usp_Comment_Add, not here, since a CHECK
+-- constraint can't see other rows.
+-- Idempotent, same guarded-ALTER pattern as the rest of this file, so
+-- re-running init.sql after the column already exists is a no-op.
+-------------------------------------------------------------------------------
+IF NOT EXISTS (
+    SELECT 1 FROM sys.columns
+    WHERE object_id = OBJECT_ID('dsc.Comment') AND name = 'ParentCommentId'
+)
+BEGIN
+    ALTER TABLE dsc.Comment ADD ParentCommentId UNIQUEIDENTIFIER NULL;
+END
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = 'FK_Comment_ParentComment')
+BEGIN
+    ALTER TABLE dsc.Comment
+        ADD CONSTRAINT FK_Comment_ParentComment FOREIGN KEY (TenantId, ParentCommentId)
+            REFERENCES dsc.Comment (TenantId, CommentId);
+END
+GO
+
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes
+    WHERE name = 'IX_Comment_Parent' AND object_id = OBJECT_ID('dsc.Comment')
+)
+BEGIN
+    CREATE INDEX IX_Comment_Parent ON dsc.Comment (TenantId, ParentCommentId)
+        WHERE ParentCommentId IS NOT NULL;
+END
+GO
+
+-------------------------------------------------------------------------------
 -- Guard: every table in dsc MUST have TenantId UNIQUEIDENTIFIER NOT NULL.
 -- Mirrors the dbo guard in 010-tables.sql; fails the deployment if someone forgets.
 -------------------------------------------------------------------------------

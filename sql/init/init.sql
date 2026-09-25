@@ -1,5 +1,9 @@
 -- Discussion Thread PoC — db/init.sql
 -- Idempotent: safe to run twice. Creates DB, schema, table, procedures, seed data.
+--
+-- Replies: one flat level only. ParentCommentId = NULL means top-level; a non-NULL
+-- ParentCommentId means it's a reply. Comments_Create_JSON rejects a reply whose parent
+-- is itself a reply, so replies never nest past one level.
 
 IF DB_ID('DiscussionPoC') IS NULL
 BEGIN
@@ -8,6 +12,10 @@ END
 GO
 
 USE DiscussionPoC;
+GO
+
+SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
 GO
 
 IF NOT EXISTS (SELECT 1 FROM sys.schemas WHERE name = 'dsc')
@@ -33,6 +41,35 @@ BEGIN
 END
 GO
 
+-- Added for replies. Guarded so this applies cleanly to a DB that already exists
+-- from before replies were added, as well as to a brand-new one.
+IF NOT EXISTS (
+    SELECT 1 FROM sys.columns
+    WHERE object_id = OBJECT_ID('dsc.Comments') AND name = 'ParentCommentId'
+)
+BEGIN
+    ALTER TABLE dsc.Comments ADD ParentCommentId UNIQUEIDENTIFIER NULL;
+END
+GO
+
+IF NOT EXISTS (SELECT 1 FROM sys.foreign_keys WHERE name = 'FK_Comments_ParentComment')
+BEGIN
+    ALTER TABLE dsc.Comments
+        ADD CONSTRAINT FK_Comments_ParentComment FOREIGN KEY (TenantId, ParentCommentId)
+            REFERENCES dsc.Comments (TenantId, CommentId);
+END
+GO
+
+IF NOT EXISTS (
+    SELECT 1 FROM sys.indexes
+    WHERE name = 'IX_Comments_Parent' AND object_id = OBJECT_ID('dsc.Comments')
+)
+BEGIN
+    CREATE INDEX IX_Comments_Parent ON dsc.Comments (TenantId, ParentCommentId)
+        WHERE ParentCommentId IS NOT NULL;
+END
+GO
+
 -- ---------------------------------------------------------------------
 -- Stored procedures (signatures per section 1.3 of the plan)
 -- ---------------------------------------------------------------------
@@ -44,11 +81,11 @@ BEGIN
     SET NOCOUNT ON;
     SELECT CommentId AS commentId, ThreadId AS threadId, TenantId AS tenantId,
            AuthorMemberId AS authorMemberId, AuthorName AS authorName,
-           Body AS body, CreatedUtc AS createdUtc
+           Body AS body, ParentCommentId AS parentCommentId, CreatedUtc AS createdUtc
     FROM dsc.Comments
     WHERE TenantId = @TenantId AND ThreadId = @ThreadId AND IsDeleted = 0
     ORDER BY CreatedUtc
-    FOR JSON PATH;
+    FOR JSON PATH, INCLUDE_NULL_VALUES;
 END;
 GO
 
@@ -62,16 +99,25 @@ BEGIN
     DECLARE @Body NVARCHAR(MAX) = JSON_VALUE(@Input, '$.body');
     IF @Body IS NULL OR LTRIM(RTRIM(@Body)) = '' THROW 50002, 'body is required.', 1;
     DECLARE @Name NVARCHAR(100) = ISNULL(JSON_VALUE(@Input, '$.authorName'), 'Member');
+    DECLARE @ParentCommentId UNIQUEIDENTIFIER = TRY_CONVERT(UNIQUEIDENTIFIER, JSON_VALUE(@Input, '$.parentCommentId'));
+
+    IF @ParentCommentId IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM dsc.Comments
+        WHERE TenantId = @TenantId AND ThreadId = @ThreadId AND CommentId = @ParentCommentId
+          AND IsDeleted = 0 AND ParentCommentId IS NULL
+    )
+        THROW 50003, 'parentCommentId not found, or is itself a reply.', 1;
+
     DECLARE @Id UNIQUEIDENTIFIER = NEWID();
 
-    INSERT INTO dsc.Comments (TenantId, CommentId, ThreadId, AuthorMemberId, AuthorName, Body)
-    VALUES (@TenantId, @Id, @ThreadId, @MemberId, @Name, @Body);
+    INSERT INTO dsc.Comments (TenantId, CommentId, ThreadId, AuthorMemberId, AuthorName, Body, ParentCommentId)
+    VALUES (@TenantId, @Id, @ThreadId, @MemberId, @Name, @Body, @ParentCommentId);
 
     SELECT CommentId AS commentId, ThreadId AS threadId, TenantId AS tenantId,
            AuthorMemberId AS authorMemberId, AuthorName AS authorName,
-           Body AS body, CreatedUtc AS createdUtc
+           Body AS body, ParentCommentId AS parentCommentId, CreatedUtc AS createdUtc
     FROM dsc.Comments WHERE TenantId = @TenantId AND CommentId = @Id
-    FOR JSON PATH, WITHOUT_ARRAY_WRAPPER;
+    FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES;
 END;
 GO
 

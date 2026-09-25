@@ -1,7 +1,13 @@
 """
 Thin data-access layer. The API never writes SELECT/INSERT/UPDATE/DELETE
-against tables directly — it only EXECs the stored procedures agreed in
+against tables directly - it only EXECs the stored procedures agreed in
 section 1.3 / 4 of the build plan, and passes the JSON straight through.
+
+These proc names match sql/init/init.sql - the only file the sql-init
+container actually executes at startup (its entrypoint runs just that
+one file, not the whole sql/init folder). The numbered 000-190 files in
+this folder describe a more complete schema (database Cobble398) but are
+not wired up to run yet, so this layer must NOT point at them.
 """
 import json
 import os

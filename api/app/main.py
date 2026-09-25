@@ -72,7 +72,11 @@ def create_comment(thread_id: str, payload: CommentCreateRequest):
     tenant_id = current_tenant_id()
     member_id = current_member_id()
     input_json = json.dumps(
-        {"body": payload.body, "authorName": current_author_name()}
+        {
+            "body": payload.body,
+            "authorName": current_author_name(),
+            "parentCommentId": payload.parentCommentId,
+        }
     )
     try:
         created = db.create_comment(tenant_id, member_id, thread_id, input_json)
@@ -80,6 +84,10 @@ def create_comment(thread_id: str, payload: CommentCreateRequest):
         msg = str(exc)
         if "50002" in msg or "body is required" in msg:
             raise ApiError(400, "VALIDATION", "body is required.") from exc
+        if "50003" in msg or "parentCommentId" in msg:
+            raise ApiError(
+                404, "NOT_FOUND", "parentCommentId not found, or is itself a reply."
+            ) from exc
         log.exception("Create failed")
         raise ApiError(500, "DB_ERROR", msg) from exc
     if not created:
