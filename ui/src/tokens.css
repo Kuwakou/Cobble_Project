@@ -128,3 +128,101 @@ body {
   padding: var(--cobble-space-sm) var(--cobble-space-md);
   cursor: pointer;
 }
+
+/* ---- votes, karma and the dev member picker (added with like/dislike) ---- */
+
+.header-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--cobble-space-md);
+  flex-wrap: wrap;
+}
+.member-picker {
+  font-size: 12px;
+  color: var(--cobble-color-muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.member-picker select {
+  background: var(--cobble-color-bg);
+  color: var(--cobble-color-text);
+  border: 1px solid var(--cobble-color-muted);
+  border-radius: var(--cobble-radius-md);
+  padding: 3px 6px;
+  font-size: 12px;
+}
+
+.comment-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--cobble-space-sm);
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+.vote-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: var(--cobble-space-sm);
+}
+.btn-vote {
+  background: transparent;
+  color: var(--cobble-color-text);
+  border: 1px solid var(--cobble-color-muted);
+  border-radius: var(--cobble-radius-md);
+  padding: 2px 8px;
+  font-size: 12px;
+  cursor: pointer;
+  line-height: 1.6;
+}
+.btn-vote:hover:not(:disabled) { border-color: var(--cobble-color-primary); }
+.btn-vote:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn-vote.active-like {
+  border-color: var(--cobble-color-primary);
+  background: var(--cobble-color-primary);
+  color: white;
+}
+.btn-vote.active-dislike {
+  border-color: var(--cobble-color-danger);
+  background: var(--cobble-color-danger);
+  color: white;
+}
+.score { font-size: 12px; color: var(--cobble-color-muted); min-width: 2ch; }
+.score.pos { color: var(--cobble-color-primary); font-weight: 600; }
+.score.neg { color: var(--cobble-color-danger); font-weight: 600; }
+
+.karma-badge {
+  font-size: 11px;
+  color: var(--cobble-color-muted);
+  border: 1px solid var(--cobble-color-muted);
+  border-radius: 999px;
+  padding: 0 7px;
+  margin-left: 6px;
+}
+
+.karma-panel { margin-bottom: var(--cobble-space-md); }
+.karma-panel h2 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--cobble-color-muted);
+  margin: 0 0 6px;
+}
+.karma-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.karma-table th {
+  text-align: left;
+  font-weight: 600;
+  color: var(--cobble-color-muted);
+  border-bottom: 1px solid var(--cobble-color-muted);
+  padding: 4px 8px 4px 0;
+}
+.karma-table td { padding: 4px 8px 4px 0; }
+.karma-table tr.is-me td { font-weight: 700; }
+.karma-table td.pos { color: var(--cobble-color-primary); }
+.karma-table td.neg { color: var(--cobble-color-danger); }
