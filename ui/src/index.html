@@ -23,37 +23,62 @@
     const THREAD_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
     const API_BASE_URL = window.API_BASE_URL || "http://localhost:8080";
 
-    function CommentContent ({c, edit}) {
-      if (edit.editingId === c.commentId) {
-        return (
-          <form className="reply-form" onSubmit={(e) => { e.preventDefault(); edit.saveEdit(c.commentId); }}>
-            <input type="text" value={edit.editDraft} onChange={(e) => edit.setEditDraft(e.target.value)} />
-            <button type="submit" className="btn-add">Save</button>
-            <button type="button" className="btn-reply" onClick={edit.cancel}>Cancel</button>
-          </form>
-        );
-      }
+    // DEV ONLY: identifies the acting member to the API. Replaced by the JWT
+    // Authorization header once auth is wired — the API reads identity from
+    // one place either way, so nothing else in this file changes.
+    const authHeaders = (memberId) => ({ "X-Member-Id": memberId });
+
+    function VoteButtons({ comment, onVote }) {
+      // Pressing an active button clears the vote (sends 0) — a toggle.
+      const cast = (v) => onVote(comment.commentId, comment.myVote === v ? 0 : v);
+      const isOwn = comment.isOwn;
+      const title = isOwn ? "You cannot vote on your own comment" : undefined;
       return (
-        <>
-          <div className="comment-body">{c.body}</div>
-          <button className="btn-reply" onClick={() => edit.start(c)}>Edit</button>
-        </>
-      )
+        <span className="vote-group">
+          <button
+            className={"btn-vote" + (comment.myVote === 1 ? " active-like" : "")}
+            onClick={() => cast(1)}
+            disabled={isOwn}
+            title={title}
+            aria-label="Like"
+          >
+            👍 {comment.likes}
+          </button>
+          <button
+            className={"btn-vote" + (comment.myVote === -1 ? " active-dislike" : "")}
+            onClick={() => cast(-1)}
+            disabled={isOwn}
+            title={title}
+            aria-label="Dislike"
+          >
+            👎 {comment.dislikes}
+          </button>
+          <span className={"score" + (comment.score > 0 ? " pos" : comment.score < 0 ? " neg" : "")}>
+            {comment.score > 0 ? `+${comment.score}` : comment.score}
+          </span>
+        </span>
+      );
     }
 
-    function CommentRow({ comment, replies, onDelete, replyingTo, setReplyingTo, replyDraft, setReplyDraft, onReply, edit }) {
+    function CommentRow({ comment, replies, onDelete, onVote, replyingTo, setReplyingTo, replyDraft, setReplyDraft, onReply }) {
       const isReplying = replyingTo === comment.commentId;
       return (
         <div className="comment-row">
           <div className="comment-meta">
             <span className="comment-author">{comment.authorName}</span>
+            <span className="karma-badge" title="Author karma: likes minus dislikes received">
+              {comment.authorKarma >= 0 ? `★ ${comment.authorKarma}` : `★ ${comment.authorKarma}`}
+            </span>
             <span className="comment-time">{new Date(comment.createdUtc).toLocaleString()}</span>
           </div>
-          <CommentContent c={comment} edit={edit} />
-          <button className="btn-delete" onClick={() => onDelete(comment.commentId)}>Delete</button>
-          <button className="btn-reply" onClick={() => setReplyingTo(isReplying ? null : comment.commentId)}>
-            {isReplying ? "Cancel" : "Reply"}
-          </button>
+          <div className="comment-body">{comment.body}</div>
+          <div className="comment-actions">
+            <VoteButtons comment={comment} onVote={onVote} />
+            <button className="btn-delete" onClick={() => onDelete(comment.commentId)}>Delete</button>
+            <button className="btn-reply" onClick={() => setReplyingTo(isReplying ? null : comment.commentId)}>
+              {isReplying ? "Cancel" : "Reply"}
+            </button>
+          </div>
 
           {isReplying && (
             <form className="reply-form" onSubmit={(e) => { e.preventDefault(); onReply(comment.commentId); }}>
@@ -73,10 +98,14 @@
                 <div key={r.commentId} className="comment-row reply-row">
                   <div className="comment-meta">
                     <span className="comment-author">{r.authorName}</span>
+                    <span className="karma-badge">★ {r.authorKarma}</span>
                     <span className="comment-time">{new Date(r.createdUtc).toLocaleString()}</span>
                   </div>
-                  <CommentContent c={r} edit={edit} />
-                  <button className="btn-delete" onClick={() => onDelete(r.commentId)}>Delete</button>
+                  <div className="comment-body">{r.body}</div>
+                  <div className="comment-actions">
+                    <VoteButtons comment={r} onVote={onVote} />
+                    <button className="btn-delete" onClick={() => onDelete(r.commentId)}>Delete</button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -85,21 +114,66 @@
       );
     }
 
+    function KarmaPanel({ board, me }) {
+      if (!board.length) return null;
+      return (
+        <div className="karma-panel">
+          <h2>Top Karma</h2>
+          <table className="karma-table">
+            <thead>
+              <tr><th>Member</th><th>Posts</th><th>👍</th><th>👎</th><th>Karma</th></tr>
+            </thead>
+            <tbody>
+              {board.map((m) => (
+                <tr key={m.memberId} className={m.memberId === me ? "is-me" : ""}>
+                  <td>{m.memberName}</td>
+                  <td>{m.commentCount}</td>
+                  <td>{m.likesReceived}</td>
+                  <td>{m.dislikesReceived}</td>
+                  <td className={m.karma > 0 ? "pos" : m.karma < 0 ? "neg" : ""}>
+                    {m.karma > 0 ? `+${m.karma}` : m.karma}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
+
     function App() {
       const [comments, setComments] = useState([]);
+      const [karma, setKarma] = useState([]);
+      const [members, setMembers] = useState([]);
+      const [me, setMe] = useState("30000000-0000-0000-0000-000000000001");
       const [draft, setDraft] = useState("");
       const [status, setStatus] = useState("loading");
       const [error, setError] = useState(null);
+      const [replyingTo, setReplyingTo] = useState(null);
+      const [replyDraft, setReplyDraft] = useState("");
+
+      useEffect(() => {
+        fetch(`${API_BASE_URL}/members`)
+          .then((res) => res.json())
+          .then(setMembers)
+          .catch(() => setMembers([]));
+      }, []);
 
       const load = useCallback(() => {
         setStatus("loading");
-        fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments`)
-          .then((res) => {
-            if (!res.ok) throw new Error(`GET failed: ${res.status}`);
-            return res.json();
-          })
-          .then((data) => {
-            setComments(data);
+        Promise.all([
+          fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments`, { headers: authHeaders(me) })
+            .then((res) => {
+              if (!res.ok) throw new Error(`GET failed: ${res.status}`);
+              return res.json();
+            }),
+          fetch(`${API_BASE_URL}/karma`).then((res) => (res.ok ? res.json() : [])),
+        ])
+          .then(([data, board]) => {
+            // The API never lets a member vote on their own comment; marking
+            // it here keeps the buttons disabled rather than failing on click.
+            setComments(data.map((c) => ({ ...c, isOwn: c.authorMemberId === me })));
+            setKarma(board);
             setStatus("ready");
             setError(null);
           })
@@ -107,97 +181,90 @@
             setStatus("error");
             setError(err.message);
           });
-      }, []);
+      }, [me]);
 
-      useEffect(() => {
-        load();
-      }, [load]);
-      
-    const postComment = (body, parentCommentId) => {
-      fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body, parentCommentId: parentCommentId ?? null }),
-      })
-        .then((res) => {
-          if (!res.ok) throw new Error(`POST failed: ${res.status}`);
-          return res.json();
+      useEffect(() => { load(); }, [load]);
+
+      const postComment = (body, parentCommentId) => {
+        fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders(me) },
+          body: JSON.stringify({ body, parentCommentId: parentCommentId ?? null }),
         })
-        .then(() => load())
+          .then((res) => {
+            if (!res.ok) throw new Error(`POST failed: ${res.status}`);
+            return res.json();
+          })
+          .then(() => { setReplyingTo(null); setReplyDraft(""); load(); })
           .catch((err) => setError(err.message));
-        };
-      
-        const submitComment = (e) => {
-          e.preventDefault();
-          if (!draft.trim()) return;
-          postComment(draft);
-          setDraft("");
-        };
+      };
 
-      
-      const topLevel = comments.filter((c) => !c.parentCommentId);
-      const repliesByParent = {};
-      for (const c of comments) {
-        if (c.parentCommentId) {
-        (repliesByParent[c.parentCommentId] ??= []).push(c);
-          }
-        }
-      
+      const submitComment = (e) => {
+        e.preventDefault();
+        if (!draft.trim()) return;
+        postComment(draft);
+        setDraft("");
+      };
 
-      const [replyingTo, setReplyingTo] = useState(null); // commentId or null
-      const [replyDraft, setReplyDraft] = useState("");
-      
-      
+      const vote = (commentId, value) => {
+        fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments/${commentId}/vote`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json", ...authHeaders(me) },
+          body: JSON.stringify({ value }),
+        })
+          .then(async (res) => {
+            if (!res.ok) {
+              const b = await res.json().catch(() => ({}));
+              throw new Error(b.message || `Vote failed: ${res.status}`);
+            }
+            return res.json();
+          })
+          // Reload rather than patching state locally: a vote changes the
+          // author's karma everywhere it appears, not just this one row.
+          .then(() => { setError(null); load(); })
+          .catch((err) => setError(err.message));
+      };
+
       const deleteComment = (commentId) => {
         fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments/${commentId}`, {
           method: "DELETE",
+          headers: authHeaders(me),
         })
           .then((res) => {
-            if (!res.ok && res.status !== 204) {
-              throw new Error(`DELETE failed: ${res.status}`);
-            }
+            if (!res.ok && res.status !== 204) throw new Error(`DELETE failed: ${res.status}`);
             load();
           })
           .catch((err) => setError(err.message));
       };
 
-      const [editingId, setEditingId] = useState(null);
-      const [editDraft, setEditDraft] = useState("");
-
-      const saveEdit = (commentId) => {
-        if (!editDraft.trim()) return;
-        fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments/${commentId}`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ body: editDraft }),
-        })
-          .then((res) => {
-            if (!res.ok) throw new Error(`PATCH failed: ${res.status}`);
-            return res.json();
-          })
-          .then(() => { setEditingId(null); load(); })
-          .catch((err) => setError(err.message)); 
-      };
-
-      const edit = {
-        editingId, editDraft, setEditingId, setEditDraft, saveEdit,
-          start: (c) => {
-          setEditingId(c.commentId);
-          setEditDraft(c.body);
-        },
-        cancel: () => {
-          setEditingId(null);
-        }
-      };
+      const topLevel = comments.filter((c) => !c.parentCommentId);
+      const repliesByParent = {};
+      for (const c of comments) {
+        if (c.parentCommentId) (repliesByParent[c.parentCommentId] ??= []).push(c);
+      }
 
       return (
         <div className="card">
-          <h1>Discussion Thread — PoC</h1>
+          <div className="header-row">
+            <h1>Discussion Thread — PoC</h1>
+            {members.length > 0 && (
+              <label className="member-picker">
+                Viewing as
+                <select value={me} onChange={(e) => setMe(e.target.value)}>
+                  {members.map((m) => (
+                    <option key={m.memberId} value={m.memberId}>{m.memberName}</option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </div>
           <p className="thread-id">Thread: {THREAD_ID}</p>
 
           {status === "loading" && <p>Loading…</p>}
-          {status === "error" && <p className="status-fail">Error: {error}</p>}
-          
+          {error && <p className="status-fail">Error: {error}</p>}
+
+          <KarmaPanel board={karma} me={me} />
+
           <div className="comment-list">
             {topLevel.map((c) => (
               <CommentRow
@@ -205,12 +272,12 @@
                 comment={c}
                 replies={repliesByParent[c.commentId] || []}
                 onDelete={deleteComment}
+                onVote={vote}
                 replyingTo={replyingTo}
                 setReplyingTo={setReplyingTo}
                 replyDraft={replyDraft}
                 setReplyDraft={setReplyDraft}
                 onReply={(parentId) => postComment(replyDraft, parentId)}
-                edit={edit}
               />
             ))}
             {status === "ready" && comments.length === 0 && (

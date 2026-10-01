@@ -54,11 +54,27 @@ def _exec_json_proc(proc_name: str, params: tuple):
         conn.close()
 
 
-def get_comments_by_thread(tenant_id: str, thread_id: str):
+def get_comments_by_thread(tenant_id: str, thread_id: str, member_id: str | None = None):
+    # member_id is optional in the procedure too; when given, each comment
+    # comes back with myVote set for that member.
     result = _exec_json_proc(
-        "dsc.Comments_GetByThread_JSON", (tenant_id, thread_id)
+        "dsc.Comments_GetByThread_JSON", (tenant_id, thread_id, member_id)
     )
     return result or []
+
+
+def set_comment_vote(tenant_id: str, member_id: str, comment_id: str, body_json: str):
+    return _exec_json_proc(
+        "dsc.CommentVote_Set_JSON", (tenant_id, member_id, comment_id, body_json)
+    )
+
+
+def get_member_karma(tenant_id: str, member_id: str):
+    return _exec_json_proc("dsc.MemberKarma_Get_JSON", (tenant_id, member_id))
+
+
+def list_member_karma(tenant_id: str):
+    return _exec_json_proc("dsc.MemberKarma_List_JSON", (tenant_id,)) or []
 
 
 def create_comment(tenant_id: str, member_id: str, thread_id: str, body_json: str):
