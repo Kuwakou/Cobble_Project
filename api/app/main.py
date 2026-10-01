@@ -7,7 +7,7 @@ from fastapi.responses import JSONResponse
 
 from . import db
 from .identity import current_author_name, current_member_id, current_tenant_id
-from .models import Comment, CommentCreateRequest, DeleteResult
+from .models import Comment, CommentCreateRequest, DeleteResult, CommentUpdateRequest
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("api")
@@ -94,6 +94,30 @@ def create_comment(thread_id: str, payload: CommentCreateRequest):
         raise ApiError(500, "DB_ERROR", "Insert did not return a row.")
     return created
 
+@app.patch(
+        "/threads/{thread_id}/comments/{comment_id}",
+        response_model=Comment,
+        status_code=200,
+)
+def update_comment(thread_id: str, comment_id: str, payload: CommentUpdateRequest):
+    tenant_id = current_tenant_id()
+    member_id = current_member_id()
+    input_json = json.dumps({"body": payload.body})
+    try:
+        update = db.update_comment(tenant_id, member_id, thread_id, comment_id, input_json)
+    except Exception as exc:
+        msg = str(exc)
+        if "50002" in msg:
+            raise ApiError(400, "VALIDATION", "body is required.") from exc
+        if "50004" in msg:
+            raise ApiError(404, "NOT_FOUND", "Comment does not exist in this tenant.") from exc
+        if "50005" in msg:
+            raise ApiError(403, "FORBIDDEN", "Comment does not belong to this member.") from exc
+        log.exception("Update failed")
+        raise ApiError(500, "DB_ERROR", msg) from exc
+    if not update:
+        raise ApiError(500, "DB_ERROR", "Update did not return a row.")
+    return update
 
 @app.delete(
     "/threads/{thread_id}/comments/{comment_id}",

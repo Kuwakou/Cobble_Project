@@ -19,6 +19,8 @@ class CommentCreateRequest(BaseModel):
     body: str = Field(..., min_length=1)
     parentCommentId: Optional[str] = None
 
+class CommentUpdateRequest(BaseModel):
+    body: str = Field(..., min_length=1)
 
 class DeleteResult(BaseModel):
     deleted: int

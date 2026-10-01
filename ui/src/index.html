@@ -23,7 +23,25 @@
     const THREAD_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
     const API_BASE_URL = window.API_BASE_URL || "http://localhost:8080";
 
-    function CommentRow({ comment, replies, onDelete, replyingTo, setReplyingTo, replyDraft, setReplyDraft, onReply }) {
+    function CommentContent ({c, edit}) {
+      if (edit.editingId === c.commentId) {
+        return (
+          <form className="reply-form" onSubmit={(e) => { e.preventDefault(); edit.saveEdit(c.commentId); }}>
+            <input type="text" value={edit.editDraft} onChange={(e) => edit.setEditDraft(e.target.value)} />
+            <button type="submit" className="btn-add">Save</button>
+            <button type="button" className="btn-reply" onClick={edit.cancel}>Cancel</button>
+          </form>
+        );
+      }
+      return (
+        <>
+          <div className="comment-body">{c.body}</div>
+          <button className="btn-reply" onClick={() => edit.start(c)}>Edit</button>
+        </>
+      )
+    }
+
+    function CommentRow({ comment, replies, onDelete, replyingTo, setReplyingTo, replyDraft, setReplyDraft, onReply, edit }) {
       const isReplying = replyingTo === comment.commentId;
       return (
         <div className="comment-row">
@@ -31,7 +49,7 @@
             <span className="comment-author">{comment.authorName}</span>
             <span className="comment-time">{new Date(comment.createdUtc).toLocaleString()}</span>
           </div>
-          <div className="comment-body">{comment.body}</div>
+          <CommentContent c={comment} edit={edit} />
           <button className="btn-delete" onClick={() => onDelete(comment.commentId)}>Delete</button>
           <button className="btn-reply" onClick={() => setReplyingTo(isReplying ? null : comment.commentId)}>
             {isReplying ? "Cancel" : "Reply"}
@@ -57,7 +75,7 @@
                     <span className="comment-author">{r.authorName}</span>
                     <span className="comment-time">{new Date(r.createdUtc).toLocaleString()}</span>
                   </div>
-                  <div className="comment-body">{r.body}</div>
+                  <CommentContent c={r} edit={edit} />
                   <button className="btn-delete" onClick={() => onDelete(r.commentId)}>Delete</button>
                 </div>
               ))}
@@ -130,8 +148,6 @@
       const [replyDraft, setReplyDraft] = useState("");
       
       
-    
-
       const deleteComment = (commentId) => {
         fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments/${commentId}`, {
           method: "DELETE",
@@ -143,6 +159,35 @@
             load();
           })
           .catch((err) => setError(err.message));
+      };
+
+      const [editingId, setEditingId] = useState(null);
+      const [editDraft, setEditDraft] = useState("");
+
+      const saveEdit = (commentId) => {
+        if (!editDraft.trim()) return;
+        fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments/${commentId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ body: editDraft }),
+        })
+          .then((res) => {
+            if (!res.ok) throw new Error(`PATCH failed: ${res.status}`);
+            return res.json();
+          })
+          .then(() => { setEditingId(null); load(); })
+          .catch((err) => setError(err.message)); 
+      };
+
+      const edit = {
+        editingId, editDraft, setEditingId, setEditDraft, saveEdit,
+          start: (c) => {
+          setEditingId(c.commentId);
+          setEditDraft(c.body);
+        },
+        cancel: () => {
+          setEditingId(null);
+        }
       };
 
       return (
@@ -165,6 +210,7 @@
                 replyDraft={replyDraft}
                 setReplyDraft={setReplyDraft}
                 onReply={(parentId) => postComment(replyDraft, parentId)}
+                edit={edit}
               />
             ))}
             {status === "ready" && comments.length === 0 && (
