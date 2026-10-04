@@ -1,13 +1,13 @@
-import json
 import logging
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from . import db
-from .identity import current_author_name, current_member_id, current_tenant_id
-from .models import Comment, CommentCreateRequest, DeleteResult
+from .db import DbError
+from .identity import STANDALONE_ENABLED, mint_standalone_token, read_scope
+from .models import Comment, CommentCreateRequest
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("api")
@@ -15,7 +15,7 @@ log = logging.getLogger("api")
 app = FastAPI(
     title="Discussion Thread API",
     description="Discussion Thread microservice PoC — Swagger UI at /docs.",
-    version="0.1.0",
+    version="0.2.0",
 )
 
 # The UI is served from a different origin (localhost:8080) than the API
@@ -43,9 +43,61 @@ async def api_error_handler(_request: Request, exc: ApiError):
     )
 
 
+# Maps a DSC_* code (parsed from a THROW in dsc.dsc_Comment_CRUD_JSON) onto an
+# HTTP status, the same role Program.cs's error handling plays for EDP.
+_DB_ERROR_STATUS = {
+    "DSC_CONTEXT_REQUIRED": 401,
+    "DSC_THREAD_ID_REQUIRED": 400,
+    "DSC_BODY_REQUIRED": 400,
+    "DSC_PARENT_COMMENT_INVALID": 404,
+    "DSC_COMMENT_NOT_FOUND": 404,
+    "DSC_COMMENT_FORBIDDEN": 403,
+    "DSC_ACTION_INVALID": 500,
+}
+
+
+def _raise_from_db_error(exc: DbError):
+    status_code = _DB_ERROR_STATUS.get(exc.code, 500)
+    raise ApiError(status_code, exc.code, exc.message) from exc
+
+
+def _require_scope(authorization: str | None):
+    scope = read_scope(authorization)
+    if scope is None:
+        raise ApiError(401, "DSC_UNAUTHENTICATED", "A valid Authorization: Bearer token is required.")
+    return scope
+
+
+def _require_permission(scope, permission: str):
+    if not scope.has(permission):
+        raise ApiError(
+            403,
+            "DSC_PERMISSION_REQUIRED",
+            f"This action requires the '{permission}' permission.",
+        )
+
+
 @app.get("/health")
 def health():
-    return {"status": "healthy"}
+    return {"service": "DSC", "version": "0.2.0", "status": "healthy"}
+
+
+@app.get("/readiness")
+def readiness():
+    if db.readiness_ok():
+        return {"status": "ready"}
+    raise ApiError(503, "DSC_NOT_READY", "dsc.dsc_Comment_CRUD_JSON is not installed yet.")
+
+
+# Teaching-only harness: mints a token for the single seeded member so the
+# UI has something to send as Authorization: Bearer. Same role as EDP's
+# POST /standalone/context, and the same rule applies - DSC_STANDALONE_ENABLED
+# must only ever be true in local development.
+@app.post("/standalone/context")
+def standalone_context():
+    if not STANDALONE_ENABLED:
+        raise ApiError(404, "DSC_NOT_FOUND", "Not found.")
+    return {"token": mint_standalone_token()}
 
 
 @app.get(
@@ -53,13 +105,16 @@ def health():
     response_model=list[Comment],
     status_code=200,
 )
-def get_comments(thread_id: str):
-    tenant_id = current_tenant_id()
+def get_comments(thread_id: str, authorization: str | None = Header(default=None)):
+    scope = _require_scope(authorization)
+    _require_permission(scope, "dsc.comments.read")
     try:
-        rows = db.get_comments_by_thread(tenant_id, thread_id)
+        rows = db.list_comments(scope, thread_id)
+    except DbError as exc:
+        _raise_from_db_error(exc)
     except Exception as exc:  # pragma: no cover - defensive
-        log.exception("GetByThread failed")
-        raise ApiError(500, "DB_ERROR", str(exc)) from exc
+        log.exception("List failed")
+        raise ApiError(500, "DSC_DB_ERROR", str(exc)) from exc
     return rows
 
 
@@ -68,30 +123,22 @@ def get_comments(thread_id: str):
     response_model=Comment,
     status_code=201,
 )
-def create_comment(thread_id: str, payload: CommentCreateRequest):
-    tenant_id = current_tenant_id()
-    member_id = current_member_id()
-    input_json = json.dumps(
-        {
-            "body": payload.body,
-            "authorName": current_author_name(),
-            "parentCommentId": payload.parentCommentId,
-        }
-    )
+def create_comment(
+    thread_id: str,
+    payload: CommentCreateRequest,
+    authorization: str | None = Header(default=None),
+):
+    scope = _require_scope(authorization)
+    _require_permission(scope, "dsc.comments.write")
     try:
-        created = db.create_comment(tenant_id, member_id, thread_id, input_json)
+        created = db.create_comment(scope, thread_id, payload.body, payload.parentCommentId)
+    except DbError as exc:
+        _raise_from_db_error(exc)
     except Exception as exc:
-        msg = str(exc)
-        if "50002" in msg or "body is required" in msg:
-            raise ApiError(400, "VALIDATION", "body is required.") from exc
-        if "50003" in msg or "parentCommentId" in msg:
-            raise ApiError(
-                404, "NOT_FOUND", "parentCommentId not found, or is itself a reply."
-            ) from exc
         log.exception("Create failed")
-        raise ApiError(500, "DB_ERROR", msg) from exc
+        raise ApiError(500, "DSC_DB_ERROR", str(exc)) from exc
     if not created:
-        raise ApiError(500, "DB_ERROR", "Insert did not return a row.")
+        raise ApiError(500, "DSC_DB_ERROR", "Insert did not return a row.")
     return created
 
 
@@ -99,14 +146,14 @@ def create_comment(thread_id: str, payload: CommentCreateRequest):
     "/threads/{thread_id}/comments/{comment_id}",
     status_code=204,
 )
-def delete_comment(thread_id: str, comment_id: str):
-    tenant_id = current_tenant_id()
-    member_id = current_member_id()
+def delete_comment(thread_id: str, comment_id: str, authorization: str | None = Header(default=None)):
+    scope = _require_scope(authorization)
+    _require_permission(scope, "dsc.comments.delete")
     try:
-        result = db.delete_comment(tenant_id, member_id, comment_id)
+        db.delete_comment(scope, comment_id)
+    except DbError as exc:
+        _raise_from_db_error(exc)
     except Exception as exc:
         log.exception("Delete failed")
-        raise ApiError(500, "DB_ERROR", str(exc)) from exc
-    if result.get("deleted", 0) == 0:
-        raise ApiError(404, "NOT_FOUND", "Comment does not exist in this tenant.")
+        raise ApiError(500, "DSC_DB_ERROR", str(exc)) from exc
     return None

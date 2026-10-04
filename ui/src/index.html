@@ -19,8 +19,10 @@
     const { useState, useEffect, useCallback } = React;
 
     // Hard-coded single thread for the PoC (per the plan's "Thread scope"
-    // decision — don't build thread listing).
-    const THREAD_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    // decision — don't build thread listing). char(32), matching the
+    // CHAR(32) ID convention in sql/no-rls/build.sql (a GUID with the
+    // dashes stripped), not a dashed UNIQUEIDENTIFIER string.
+    const THREAD_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const API_BASE_URL = window.API_BASE_URL || "http://localhost:8080";
 
     function CommentRow({ comment, replies, onDelete, replyingTo, setReplyingTo, replyDraft, setReplyDraft, onReply }) {
@@ -73,9 +75,35 @@
       const [status, setStatus] = useState("loading");
       const [error, setError] = useState(null);
 
+      // The API now requires a signed identity (Authorization: Bearer <token>)
+      // on every call, like EDP's host-context model. There is no real host
+      // shell issuing that token for this PoC, so on first load the UI asks
+      // the API's dev-only /standalone/context endpoint for one - same
+      // teaching-harness role as EDP's own /standalone page. The token lives
+      // only in memory (a React ref), never in browser storage.
+      const [token, setToken] = useState(null);
+      const authHeaders = useCallback(
+        (extra = {}) => (token ? { Authorization: `Bearer ${token}`, ...extra } : extra),
+        [token]
+      );
+
+      useEffect(() => {
+        fetch(`${API_BASE_URL}/standalone/context`, { method: "POST" })
+          .then((res) => {
+            if (!res.ok) throw new Error(`Could not get a dev token: ${res.status}`);
+            return res.json();
+          })
+          .then((data) => setToken(data.token))
+          .catch((err) => {
+            setStatus("error");
+            setError(err.message);
+          });
+      }, []);
+
       const load = useCallback(() => {
+        if (!token) return;
         setStatus("loading");
-        fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments`)
+        fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments`, { headers: authHeaders() })
           .then((res) => {
             if (!res.ok) throw new Error(`GET failed: ${res.status}`);
             return res.json();
@@ -89,52 +117,48 @@
             setStatus("error");
             setError(err.message);
           });
-      }, []);
+      }, [token, authHeaders]);
 
       useEffect(() => {
         load();
       }, [load]);
-      
-    const postComment = (body, parentCommentId) => {
-      fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body, parentCommentId: parentCommentId ?? null }),
-      })
-        .then((res) => {
-          if (!res.ok) throw new Error(`POST failed: ${res.status}`);
-          return res.json();
-        })
-        .then(() => load())
-          .catch((err) => setError(err.message));
-        };
-      
-        const submitComment = (e) => {
-          e.preventDefault();
-          if (!draft.trim()) return;
-          postComment(draft);
-          setDraft("");
-        };
 
-      
+      const postComment = (body, parentCommentId) => {
+        fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments`, {
+          method: "POST",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({ body, parentCommentId: parentCommentId ?? null }),
+        })
+          .then((res) => {
+            if (!res.ok) throw new Error(`POST failed: ${res.status}`);
+            return res.json();
+          })
+          .then(() => load())
+          .catch((err) => setError(err.message));
+      };
+
+      const submitComment = (e) => {
+        e.preventDefault();
+        if (!draft.trim()) return;
+        postComment(draft);
+        setDraft("");
+      };
+
       const topLevel = comments.filter((c) => !c.parentCommentId);
       const repliesByParent = {};
       for (const c of comments) {
         if (c.parentCommentId) {
-        (repliesByParent[c.parentCommentId] ??= []).push(c);
-          }
+          (repliesByParent[c.parentCommentId] ??= []).push(c);
         }
-      
+      }
 
       const [replyingTo, setReplyingTo] = useState(null); // commentId or null
       const [replyDraft, setReplyDraft] = useState("");
-      
-      
-    
 
       const deleteComment = (commentId) => {
         fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments/${commentId}`, {
           method: "DELETE",
+          headers: authHeaders(),
         })
           .then((res) => {
             if (!res.ok && res.status !== 204) {
@@ -152,7 +176,7 @@
 
           {status === "loading" && <p>Loading…</p>}
           {status === "error" && <p className="status-fail">Error: {error}</p>}
-          
+
           <div className="comment-list">
             {topLevel.map((c) => (
               <CommentRow
