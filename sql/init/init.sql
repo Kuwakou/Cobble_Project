@@ -273,13 +273,35 @@ END;
 GO
 
 CREATE OR ALTER PROCEDURE dsc.Comments_Delete_JSON
-    @TenantId UNIQUEIDENTIFIER, @MemberId UNIQUEIDENTIFIER, @CommentId UNIQUEIDENTIFIER
+    @TenantId UNIQUEIDENTIFIER,
+    @MemberId UNIQUEIDENTIFIER,
+    @CommentId UNIQUEIDENTIFIER
 AS
 BEGIN
     SET NOCOUNT ON;
-    UPDATE dsc.Comments SET IsDeleted = 1
-    WHERE TenantId = @TenantId AND CommentId = @CommentId AND IsDeleted = 0;
-    SELECT @@ROWCOUNT AS deleted FOR JSON PATH, WITHOUT_ARRAY_WRAPPER;
+
+    DECLARE @Owner UNIQUEIDENTIFIER = (
+        SELECT AuthorMemberId
+        FROM dsc.Comments
+        WHERE TenantId = @TenantId
+          AND CommentId = @CommentId
+          AND IsDeleted = 0
+    );
+
+    IF @Owner IS NULL
+        THROW 50004, 'Comment not found.', 1;
+
+    IF @Owner <> @MemberId
+        THROW 50005, 'Only the author can delete their comment.', 1;
+
+    UPDATE dsc.Comments
+    SET IsDeleted = 1
+    WHERE TenantId = @TenantId
+      AND CommentId = @CommentId
+      AND IsDeleted = 0;
+
+    SELECT @@ROWCOUNT AS deleted
+    FOR JSON PATH, WITHOUT_ARRAY_WRAPPER;
 END;
 GO
 
