@@ -74,7 +74,14 @@
           <div className="comment-body">{comment.body}</div>
           <div className="comment-actions">
             <VoteButtons comment={comment} onVote={onVote} />
-            <button className="btn-delete" onClick={() => onDelete(comment.commentId)}>Delete</button>
+            {comment.isOwn && (
+              <button
+                className="btn-delete"
+                onClick={() => onDelete(comment.commentId)}
+              >
+                Delete
+              </button>
+            )}
             <button className="btn-reply" onClick={() => setReplyingTo(isReplying ? null : comment.commentId)}>
               {isReplying ? "Cancel" : "Reply"}
             </button>
@@ -104,7 +111,14 @@
                   <div className="comment-body">{r.body}</div>
                   <div className="comment-actions">
                     <VoteButtons comment={r} onVote={onVote} />
-                    <button className="btn-delete" onClick={() => onDelete(r.commentId)}>Delete</button>
+                    {r.isOwn && (
+                      <button
+                        className="btn-delete"
+                        onClick={() => onDelete(r.commentId)}
+                      >
+                        Delete
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
