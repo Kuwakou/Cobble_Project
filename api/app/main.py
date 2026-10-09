@@ -177,7 +177,7 @@ def delete_comment(thread_id: UUID, comment_id: UUID, authorization: str | None 
     scope = _require_scope(authorization)
     _require_permission(scope, "dsc.comments.delete")
     try:
-        db.delete_comment(scope, comment_id.hex)
+        db.delete_comment(scope, thread_id.hex, comment_id.hex)
     except DbError as exc:
         _raise_from_db_error(exc)
     except Exception as exc:
