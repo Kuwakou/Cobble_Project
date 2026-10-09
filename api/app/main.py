@@ -12,9 +12,13 @@ from .models import (
     CommentCreateRequest,
     DeleteResult,
     KarmaEntry,
+    ReportedComment,
+    ReportRequest,
+    ReportResult,
     VoteRequest,
     VoteResult,
 )
+
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("api")
@@ -200,3 +204,68 @@ def delete_comment(
     if result.get("deleted", 0) == 0:
         raise ApiError(404, "NOT_FOUND", "Comment does not exist in this tenant.")
     return None
+
+
+
+@app.put(
+    "/threads/{thread_id}/comments/{comment_id}/report",
+    response_model=ReportResult,
+    status_code=200,
+)
+def report_comment(
+    thread_id: str,
+    comment_id: str,
+    payload: ReportRequest,
+    x_member_id: str | None = Header(default=None),
+):
+    """
+    Flag a comment for moderator attention, with a reason.
+
+    PUT rather than POST, for the same reason the vote endpoint is a PUT:
+    a member holds at most one flag per comment, so the call sets that flag
+    and is idempotent - sending it twice leaves the same single row with an
+    updated reason, rather than inflating the count.
+
+    A member cannot flag their own comment, and cannot flag a comment in
+    another tenant. Both are refused by the database, not by this handler.
+    """
+    tenant_id = current_tenant_id()
+    member_id, _ = resolve_member(x_member_id)
+    try:
+        result = db.set_comment_report(
+            tenant_id, member_id, comment_id, json.dumps({"reason": payload.reason})
+        )
+    except Exception as exc:
+        msg = str(exc)
+        if "50030" in msg:
+            raise ApiError(
+                403, "FORBIDDEN", "You cannot report your own comment."
+            ) from exc
+        if "50004" in msg:
+            raise ApiError(404, "NOT_FOUND", "Comment not found.") from exc
+        if "50031" in msg:
+            raise ApiError(400, "VALIDATION", "reason is required.") from exc
+        if "50032" in msg:
+            raise ApiError(
+                400, "VALIDATION", "reason must be 500 characters or fewer."
+            ) from exc
+        log.exception("Report failed")
+        raise ApiError(500, "DB_ERROR", msg) from exc
+    if not result:
+        raise ApiError(500, "DB_ERROR", "Report did not return a row.")
+    return result
+
+
+@app.get("/reports", response_model=list[ReportedComment], status_code=200)
+def list_reports():
+    """
+    The moderation queue: every comment in this tenant carrying at least one
+    flag, most-reported first. Scoped to the caller's tenant, so one
+    organisation's moderators never see another's content.
+    """
+    tenant_id = current_tenant_id()
+    try:
+        return db.list_comment_reports(tenant_id)
+    except Exception as exc:
+        log.exception("Report list failed")
+        raise ApiError(500, "DB_ERROR", str(exc)) from exc

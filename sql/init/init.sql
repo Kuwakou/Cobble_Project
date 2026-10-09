@@ -208,6 +208,46 @@ GO
 -- only two arguments keep working. When supplied, each comment also carries
 -- myVote: the vote THIS member has cast on it (1, -1 or 0), which is what the
 -- UI needs to show a button as already pressed.
+-- ---------------------------------------------------------------------
+-- dsc.CommentReports - moderation flags raised by members.
+--
+-- Deliberately the same shape as dsc.CommentVotes, and for the same
+-- reason: the rules that matter are enforced by the engine, not by
+-- procedure logic, so no client - and no future procedure - can get
+-- around them.
+--   PK     one report per member per comment; re-reporting updates the
+--          existing row rather than stacking duplicates.
+--   FK     composite, so a report can only ever reference a comment in
+--          the SAME tenant, and the author recorded must be that
+--          comment's real author. Cross-tenant flags are refused (547).
+--   CHECK  a member cannot report their own comment, which would make
+--          the moderation queue trivially gameable.
+--
+-- Rows are never deleted. A withdrawn flag would destroy the audit trail
+-- the queue depends on, which is the same reasoning behind IsDeleted on
+-- dsc.Comments.
+-- ---------------------------------------------------------------------
+IF OBJECT_ID('dsc.CommentReports') IS NULL
+BEGIN
+    CREATE TABLE dsc.CommentReports (
+        TenantId              UNIQUEIDENTIFIER NOT NULL,
+        CommentId             UNIQUEIDENTIFIER NOT NULL,
+        ReporterMemberId      UNIQUEIDENTIFIER NOT NULL,
+        CommentAuthorMemberId UNIQUEIDENTIFIER NOT NULL,
+        Reason                NVARCHAR(500)    NOT NULL,
+        CreatedUtc            DATETIME2        NOT NULL CONSTRAINT DF_CommentReports_CreatedUtc DEFAULT SYSUTCDATETIME(),
+        UpdatedUtc            DATETIME2        NOT NULL CONSTRAINT DF_CommentReports_UpdatedUtc DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT PK_CommentReports PRIMARY KEY (TenantId, CommentId, ReporterMemberId),
+        CONSTRAINT FK_CommentReports_CommentAuthor
+            FOREIGN KEY (TenantId, CommentId, CommentAuthorMemberId)
+            REFERENCES dsc.Comments (TenantId, CommentId, AuthorMemberId),
+        CONSTRAINT CK_CommentReports_NoSelfReport
+            CHECK (ReporterMemberId <> CommentAuthorMemberId)
+    );
+    CREATE INDEX IX_CommentReports_Comment ON dsc.CommentReports (TenantId, CommentId);
+END
+GO
+
 CREATE OR ALTER PROCEDURE dsc.Comments_GetByThread_JSON
     @TenantId UNIQUEIDENTIFIER, @ThreadId UNIQUEIDENTIFIER,
     @MemberId UNIQUEIDENTIFIER = NULL
@@ -504,4 +544,103 @@ GO
 DECLARE @Votes INT = (SELECT COUNT(*) FROM dsc.CommentVotes);
 DECLARE @Members INT = (SELECT COUNT(*) FROM dsc.vw_MemberKarma);
 PRINT CONCAT('dsc ready - votes: ', @Votes, ' | members with karma: ', @Members);
+GO
+
+
+-- ---------------------------------------------------------------------
+-- dsc.CommentReport_Set_JSON
+-- in : @TenantId, @MemberId (both from the caller's identity, never the
+--      body), @CommentId, @Input = { "reason": "..." }
+-- out: the comment's report tally + whether the caller has flagged it
+-- err: 50031 reason missing | 50032 reason too long
+--    | 50004 comment not found | 50030 self-report
+--
+-- Upsert rather than insert, for the same reason CommentVote_Set_JSON is
+-- a PUT: a member holds at most one flag per comment, so raising the same
+-- flag twice leaves one row with an updated reason.
+-- ---------------------------------------------------------------------
+CREATE OR ALTER PROCEDURE dsc.CommentReport_Set_JSON
+    @TenantId UNIQUEIDENTIFIER, @MemberId UNIQUEIDENTIFIER,
+    @CommentId UNIQUEIDENTIFIER, @Input NVARCHAR(MAX)
+AS
+BEGIN
+    SET NOCOUNT ON; SET XACT_ABORT ON;
+
+    IF ISJSON(@Input) <> 1 THROW 50001, 'Input is not valid JSON.', 1;
+
+    DECLARE @ReasonRaw NVARCHAR(MAX) = LTRIM(RTRIM(JSON_VALUE(@Input, '$.reason')));
+    IF @ReasonRaw IS NULL OR @ReasonRaw = N'' THROW 50031, 'reason is required.', 1;
+    IF LEN(@ReasonRaw) > 500 THROW 50032, 'reason must be 500 characters or fewer.', 1;
+    DECLARE @Reason NVARCHAR(500) = @ReasonRaw;
+
+    -- Tenant fence: a comment in another tenant is simply not found, so a
+    -- caller can neither flag foreign content nor confirm it exists.
+    DECLARE @Author UNIQUEIDENTIFIER = (
+        SELECT AuthorMemberId FROM dsc.Comments
+        WHERE TenantId = @TenantId AND CommentId = @CommentId AND IsDeleted = 0);
+
+    IF @Author IS NULL THROW 50004, 'Comment not found.', 1;
+
+    IF @Author = @MemberId
+        THROW 50030, 'You cannot report your own comment.', 1;
+
+    UPDATE dsc.CommentReports
+    SET Reason = @Reason, UpdatedUtc = SYSUTCDATETIME()
+    WHERE TenantId = @TenantId AND CommentId = @CommentId AND ReporterMemberId = @MemberId;
+
+    IF @@ROWCOUNT = 0
+        INSERT INTO dsc.CommentReports
+            (TenantId, CommentId, ReporterMemberId, CommentAuthorMemberId, Reason)
+        VALUES (@TenantId, @CommentId, @MemberId, @Author, @Reason);
+
+    SELECT c.CommentId      AS commentId,
+           c.AuthorMemberId AS authorMemberId,
+           t.ReportCount    AS reportCount,
+           CAST(CASE WHEN mr.ReporterMemberId IS NULL THEN 0 ELSE 1 END AS BIT) AS myReport,
+           mr.Reason        AS myReason
+    FROM dsc.Comments c
+    CROSS APPLY (
+        SELECT COUNT(*) AS ReportCount
+        FROM dsc.CommentReports r
+        WHERE r.TenantId = c.TenantId AND r.CommentId = c.CommentId
+    ) t
+    LEFT JOIN dsc.CommentReports mr
+           ON mr.TenantId = c.TenantId AND mr.CommentId = c.CommentId
+          AND mr.ReporterMemberId = @MemberId
+    WHERE c.TenantId = @TenantId AND c.CommentId = @CommentId
+    FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES;
+END;
+GO
+
+-- ---------------------------------------------------------------------
+-- dsc.CommentReports_List_JSON - the moderation queue.
+-- Every comment in the tenant carrying at least one flag, most-reported
+-- first. Soft-deleted comments stay in the list: a moderator needs to see
+-- that a flagged comment was already removed, and by whom it was flagged.
+-- The count comes from CROSS APPLY rather than GROUP BY because Body is
+-- NVARCHAR(MAX), which SQL Server will not group on.
+-- ---------------------------------------------------------------------
+CREATE OR ALTER PROCEDURE dsc.CommentReports_List_JSON
+    @TenantId UNIQUEIDENTIFIER
+AS
+BEGIN
+    SET NOCOUNT ON;
+    SELECT c.CommentId          AS commentId,
+           c.ThreadId           AS threadId,
+           c.AuthorMemberId     AS authorMemberId,
+           c.AuthorName         AS authorName,
+           c.Body               AS body,
+           c.IsDeleted          AS isDeleted,
+           t.ReportCount        AS reportCount,
+           t.LastReportedUtc    AS lastReportedUtc
+    FROM dsc.Comments c
+    CROSS APPLY (
+        SELECT COUNT(*) AS ReportCount, MAX(r.UpdatedUtc) AS LastReportedUtc
+        FROM dsc.CommentReports r
+        WHERE r.TenantId = c.TenantId AND r.CommentId = c.CommentId
+    ) t
+    WHERE c.TenantId = @TenantId AND t.ReportCount > 0
+    ORDER BY t.ReportCount DESC, t.LastReportedUtc DESC
+    FOR JSON PATH;
+END;
 GO
