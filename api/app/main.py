@@ -1,6 +1,6 @@
 import json
 import logging
-
+from uuid import UUID
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -188,15 +188,34 @@ def member_karma(member_id: str):
     status_code=204,
 )
 def delete_comment(
-    thread_id: str, comment_id: str, x_member_id: str | None = Header(default=None)
+    thread_id: UUID,
+    comment_id: UUID,
+    x_member_id: str | None = Header(default=None),
 ):
     tenant_id = current_tenant_id()
     member_id, _ = resolve_member(x_member_id)
     try:
-        result = db.delete_comment(tenant_id, member_id, comment_id)
+        result = db.delete_comment(
+    tenant_id,
+    member_id,
+    str(thread_id),
+    str(comment_id),
+)
     except Exception as exc:
+        msg = str(exc)
+
+        if "50005" in msg:
+            raise ApiError(
+                403, "FORBIDDEN", "Only the author can delete their comment."
+            ) from exc
+
+        if "50004" in msg:
+            raise ApiError(
+                404, "NOT_FOUND", "Comment does not exist in this tenant."
+            ) from exc
+
         log.exception("Delete failed")
-        raise ApiError(500, "DB_ERROR", str(exc)) from exc
+        raise ApiError(500, "DB_ERROR", msg) from exc
     if result.get("deleted", 0) == 0:
         raise ApiError(404, "NOT_FOUND", "Comment does not exist in this tenant.")
     return None

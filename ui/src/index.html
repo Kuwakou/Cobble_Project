@@ -13,7 +13,7 @@
        calls the API. It never imports or talks to SQL directly. -->
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone@7.28.5/babel.min.js"></script>
 
   <script type="text/babel" data-presets="react">
     const { useState, useEffect, useCallback } = React;
@@ -74,7 +74,14 @@
           <div className="comment-body">{comment.body}</div>
           <div className="comment-actions">
             <VoteButtons comment={comment} onVote={onVote} />
-            <button className="btn-delete" onClick={() => onDelete(comment.commentId)}>Delete</button>
+            {comment.isOwn && (
+              <button
+                className="btn-delete"
+                onClick={() => onDelete(comment.commentId)}
+              >
+                Delete
+              </button>
+            )}
             <button className="btn-reply" onClick={() => setReplyingTo(isReplying ? null : comment.commentId)}>
               {isReplying ? "Cancel" : "Reply"}
             </button>
@@ -104,7 +111,14 @@
                   <div className="comment-body">{r.body}</div>
                   <div className="comment-actions">
                     <VoteButtons comment={r} onVote={onVote} />
-                    <button className="btn-delete" onClick={() => onDelete(r.commentId)}>Delete</button>
+                    {r.isOwn && (
+                      <button
+                        className="btn-delete"
+                        onClick={() => onDelete(r.commentId)}
+                      >
+                        Delete
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
