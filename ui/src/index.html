@@ -13,79 +13,100 @@
        calls the API. It never imports or talks to SQL directly. -->
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/@babel/standalone@7.28.5/babel.min.js"></script>
+  <script crossorigin src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
   <script type="text/babel" data-presets="react">
     const { useState, useEffect, useCallback } = React;
 
     // Hard-coded single thread for the PoC (per the plan's "Thread scope"
-    // decision — don't build thread listing).
-    const THREAD_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+    // decision — don't build thread listing). char(32), matching the
+    // CHAR(32) ID convention in sql/no-rls/build.sql (a GUID with the
+    // dashes stripped), not a dashed UNIQUEIDENTIFIER string.
+    const THREAD_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const API_BASE_URL = window.API_BASE_URL || "http://localhost:8080";
 
-    // DEV ONLY: identifies the acting member to the API. Replaced by the JWT
-    // Authorization header once auth is wired — the API reads identity from
-    // one place either way, so nothing else in this file changes.
-    const authHeaders = (memberId) => ({ "X-Member-Id": memberId });
-
     function VoteButtons({ comment, onVote }) {
-      // Pressing an active button clears the vote (sends 0) — a toggle.
-      const cast = (v) => onVote(comment.commentId, comment.myVote === v ? 0 : v);
-      const isOwn = comment.isOwn;
-      const title = isOwn ? "You cannot vote on your own comment" : undefined;
+      const disabled = comment.isOwn;
       return (
-        <span className="vote-group">
+        <span className="vote-buttons">
           <button
-            className={"btn-vote" + (comment.myVote === 1 ? " active-like" : "")}
-            onClick={() => cast(1)}
-            disabled={isOwn}
-            title={title}
-            aria-label="Like"
+            className={"btn-vote" + (comment.myVote === 1 ? " active-up" : "")}
+            disabled={disabled}
+            title={disabled ? "You can't vote on your own comment" : "Like"}
+            onClick={() => onVote(comment.commentId, comment.myVote === 1 ? 0 : 1)}
           >
             👍 {comment.likes}
           </button>
           <button
-            className={"btn-vote" + (comment.myVote === -1 ? " active-dislike" : "")}
-            onClick={() => cast(-1)}
-            disabled={isOwn}
-            title={title}
-            aria-label="Dislike"
+            className={"btn-vote" + (comment.myVote === -1 ? " active-down" : "")}
+            disabled={disabled}
+            title={disabled ? "You can't vote on your own comment" : "Dislike"}
+            onClick={() => onVote(comment.commentId, comment.myVote === -1 ? 0 : -1)}
           >
             👎 {comment.dislikes}
           </button>
-          <span className={"score" + (comment.score > 0 ? " pos" : comment.score < 0 ? " neg" : "")}>
-            {comment.score > 0 ? `+${comment.score}` : comment.score}
-          </span>
+          <span className="vote-score">{comment.score > 0 ? `+${comment.score}` : comment.score}</span>
         </span>
       );
     }
 
-    function CommentRow({ comment, replies, onDelete, onVote, replyingTo, setReplyingTo, replyDraft, setReplyDraft, onReply }) {
+    function ReportControl({ comment, onReport }) {
+      const [open, setOpen] = useState(false);
+      const [reason, setReason] = useState("");
+      if (comment.isOwn) return null;
+      return (
+        <>
+          <button
+            className={"btn-report" + (comment.myReport ? " reported" : "")}
+            onClick={() => setOpen(!open)}
+          >
+            {comment.myReport ? "Reported" : "Report"}
+            {comment.reportCount > 0 ? ` (${comment.reportCount})` : ""}
+          </button>
+          {open && (
+            <form
+              className="report-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!reason.trim()) return;
+                onReport(comment.commentId, reason);
+                setReason("");
+                setOpen(false);
+              }}
+            >
+              <input
+                type="text"
+                placeholder="Why are you reporting this?"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+              />
+              <button type="submit" className="btn-add">Send</button>
+            </form>
+          )}
+        </>
+      );
+    }
+
+    function CommentRow({ comment, replies, onDelete, onVote, onReport, replyingTo, setReplyingTo, replyDraft, setReplyDraft, onReply }) {
       const isReplying = replyingTo === comment.commentId;
       return (
         <div className="comment-row">
           <div className="comment-meta">
-            <span className="comment-author">{comment.authorName}</span>
-            <span className="karma-badge" title="Author karma: likes minus dislikes received">
-              {comment.authorKarma >= 0 ? `★ ${comment.authorKarma}` : `★ ${comment.authorKarma}`}
+            <span className="comment-author">
+              {comment.authorName}
+              <span className="karma-badge">karma {comment.authorKarma}</span>
             </span>
             <span className="comment-time">{new Date(comment.createdUtc).toLocaleString()}</span>
           </div>
           <div className="comment-body">{comment.body}</div>
-          <div className="comment-actions">
-            <VoteButtons comment={comment} onVote={onVote} />
-            {comment.isOwn && (
-              <button
-                className="btn-delete"
-                onClick={() => onDelete(comment.commentId)}
-              >
-                Delete
-              </button>
-            )}
-            <button className="btn-reply" onClick={() => setReplyingTo(isReplying ? null : comment.commentId)}>
-              {isReplying ? "Cancel" : "Reply"}
-            </button>
-          </div>
+          <VoteButtons comment={comment} onVote={onVote} />
+          {comment.isOwn && (
+            <button className="btn-delete" onClick={() => onDelete(comment.commentId)}>Delete</button>
+          )}
+          <button className="btn-reply" onClick={() => setReplyingTo(isReplying ? null : comment.commentId)}>
+            {isReplying ? "Cancel" : "Reply"}
+          </button>
+          <ReportControl comment={comment} onReport={onReport} />
 
           {isReplying && (
             <form className="reply-form" onSubmit={(e) => { e.preventDefault(); onReply(comment.commentId); }}>
@@ -104,22 +125,18 @@
               {replies.map((r) => (
                 <div key={r.commentId} className="comment-row reply-row">
                   <div className="comment-meta">
-                    <span className="comment-author">{r.authorName}</span>
-                    <span className="karma-badge">★ {r.authorKarma}</span>
+                    <span className="comment-author">
+                      {r.authorName}
+                      <span className="karma-badge">karma {r.authorKarma}</span>
+                    </span>
                     <span className="comment-time">{new Date(r.createdUtc).toLocaleString()}</span>
                   </div>
                   <div className="comment-body">{r.body}</div>
-                  <div className="comment-actions">
-                    <VoteButtons comment={r} onVote={onVote} />
-                    {r.isOwn && (
-                      <button
-                        className="btn-delete"
-                        onClick={() => onDelete(r.commentId)}
-                      >
-                        Delete
-                      </button>
-                    )}
-                  </div>
+                  <VoteButtons comment={r} onVote={onVote} />
+                  {r.isOwn && (
+                    <button className="btn-delete" onClick={() => onDelete(r.commentId)}>Delete</button>
+                  )}
+                  <ReportControl comment={r} onReport={onReport} />
                 </div>
               ))}
             </div>
@@ -132,21 +149,18 @@
       if (!board.length) return null;
       return (
         <div className="karma-panel">
-          <h2>Top Karma</h2>
-          <table className="karma-table">
+          <table>
             <thead>
               <tr><th>Member</th><th>Posts</th><th>👍</th><th>👎</th><th>Karma</th></tr>
             </thead>
             <tbody>
-              {board.map((m) => (
-                <tr key={m.memberId} className={m.memberId === me ? "is-me" : ""}>
-                  <td>{m.memberName}</td>
-                  <td>{m.commentCount}</td>
-                  <td>{m.likesReceived}</td>
-                  <td>{m.dislikesReceived}</td>
-                  <td className={m.karma > 0 ? "pos" : m.karma < 0 ? "neg" : ""}>
-                    {m.karma > 0 ? `+${m.karma}` : m.karma}
-                  </td>
+              {board.map((row) => (
+                <tr key={row.memberId} className={row.memberId === me ? "is-me" : ""}>
+                  <td>{row.memberName}</td>
+                  <td>{row.commentCount}</td>
+                  <td>{row.likesReceived}</td>
+                  <td>{row.dislikesReceived}</td>
+                  <td>{row.karma}</td>
                 </tr>
               ))}
             </tbody>
@@ -159,35 +173,77 @@
       const [comments, setComments] = useState([]);
       const [karma, setKarma] = useState([]);
       const [members, setMembers] = useState([]);
-      const [me, setMe] = useState("30000000-0000-0000-0000-000000000001");
       const [draft, setDraft] = useState("");
       const [status, setStatus] = useState("loading");
       const [error, setError] = useState(null);
-      const [replyingTo, setReplyingTo] = useState(null);
-      const [replyDraft, setReplyDraft] = useState("");
+
+      // The API requires a signed identity (Authorization: Bearer <token>)
+      // on every call, like EDP's host-context model. There is no real host
+      // shell issuing that token for this PoC, so the UI asks the API's
+      // dev-only /standalone/context endpoint for one - same teaching-
+      // harness role as EDP's own /standalone page. The token lives only
+      // in memory (React state), never in browser storage. Switching the
+      // "viewing as" member re-requests a token for that member instead of
+      // sending an X-Member-Id header, since the API only trusts identity
+      // carried in the signed token now.
+      const [me, setMe] = useState(null);
+      const [token, setToken] = useState(null);
+      const authHeaders = useCallback(
+        (extra = {}) => (token ? { Authorization: `Bearer ${token}`, ...extra } : extra),
+        [token]
+      );
+
+      const fetchToken = useCallback((memberId) => {
+        const qs = memberId ? `?member_id=${encodeURIComponent(memberId)}` : "";
+        return fetch(`${API_BASE_URL}/standalone/context${qs}`, { method: "POST" })
+          .then((res) => {
+            if (!res.ok) throw new Error(`Could not get a dev token: ${res.status}`);
+            return res.json();
+          })
+          .then((data) => setToken(data.token));
+      }, []);
 
       useEffect(() => {
         fetch(`${API_BASE_URL}/members`)
-          .then((res) => res.json())
-          .then(setMembers)
-          .catch(() => setMembers([]));
-      }, []);
+          .then((res) => {
+            if (!res.ok) throw new Error(`Could not load members: ${res.status}`);
+            return res.json();
+          })
+          .then((data) => {
+            setMembers(data);
+            const first = data[0];
+            if (first) {
+              setMe(first.memberId);
+              return fetchToken(first.memberId);
+            }
+          })
+          .catch((err) => {
+            setStatus("error");
+            setError(err.message);
+          });
+      }, [fetchToken]);
+
+      const switchMember = (memberId) => {
+        setMe(memberId);
+        fetchToken(memberId).catch((err) => setError(err.message));
+      };
 
       const load = useCallback(() => {
+        if (!token) return;
         setStatus("loading");
         Promise.all([
-          fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments`, { headers: authHeaders(me) })
-            .then((res) => {
-              if (!res.ok) throw new Error(`GET failed: ${res.status}`);
-              return res.json();
-            }),
-          fetch(`${API_BASE_URL}/karma`).then((res) => (res.ok ? res.json() : [])),
+          fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments`, { headers: authHeaders() }).then((res) => {
+            if (!res.ok) throw new Error(`GET comments failed: ${res.status}`);
+            return res.json();
+          }),
+          fetch(`${API_BASE_URL}/karma`, { headers: authHeaders() }).then((res) => {
+            if (!res.ok) throw new Error(`GET karma failed: ${res.status}`);
+            return res.json();
+          }),
         ])
-          .then(([data, board]) => {
-            // The API never lets a member vote on their own comment; marking
-            // it here keeps the buttons disabled rather than failing on click.
-            setComments(data.map((c) => ({ ...c, isOwn: c.authorMemberId === me })));
-            setKarma(board);
+          .then(([commentRows, karmaRows]) => {
+            setComments(commentRows.map((c) => ({ ...c, isOwn: c.authorMemberId === me })));
+            setKarma(karmaRows);
             setStatus("ready");
             setError(null);
           })
@@ -195,21 +251,23 @@
             setStatus("error");
             setError(err.message);
           });
-      }, [me]);
+      }, [token, me, authHeaders]);
 
-      useEffect(() => { load(); }, [load]);
+      useEffect(() => {
+        load();
+      }, [load]);
 
       const postComment = (body, parentCommentId) => {
         fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments`, {
           method: "POST",
-          headers: { "Content-Type": "application/json", ...authHeaders(me) },
+          headers: authHeaders({ "Content-Type": "application/json" }),
           body: JSON.stringify({ body, parentCommentId: parentCommentId ?? null }),
         })
           .then((res) => {
             if (!res.ok) throw new Error(`POST failed: ${res.status}`);
             return res.json();
           })
-          .then(() => { setReplyingTo(null); setReplyDraft(""); load(); })
+          .then(() => load())
           .catch((err) => setError(err.message));
       };
 
@@ -220,62 +278,76 @@
         setDraft("");
       };
 
-      const vote = (commentId, value) => {
-        fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments/${commentId}/vote`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/json", ...authHeaders(me) },
-          body: JSON.stringify({ value }),
-        })
-          .then(async (res) => {
-            if (!res.ok) {
-              const b = await res.json().catch(() => ({}));
-              throw new Error(b.message || `Vote failed: ${res.status}`);
-            }
-            return res.json();
-          })
-          // Reload rather than patching state locally: a vote changes the
-          // author's karma everywhere it appears, not just this one row.
-          .then(() => { setError(null); load(); })
-          .catch((err) => setError(err.message));
-      };
+      const topLevel = comments.filter((c) => !c.parentCommentId);
+      const repliesByParent = {};
+      for (const c of comments) {
+        if (c.parentCommentId) {
+          (repliesByParent[c.parentCommentId] ??= []).push(c);
+        }
+      }
+
+      const [replyingTo, setReplyingTo] = useState(null); // commentId or null
+      const [replyDraft, setReplyDraft] = useState("");
 
       const deleteComment = (commentId) => {
         fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments/${commentId}`, {
           method: "DELETE",
-          headers: authHeaders(me),
+          headers: authHeaders(),
         })
           .then((res) => {
-            if (!res.ok && res.status !== 204) throw new Error(`DELETE failed: ${res.status}`);
+            if (!res.ok && res.status !== 204) {
+              throw new Error(`DELETE failed: ${res.status}`);
+            }
             load();
           })
           .catch((err) => setError(err.message));
       };
 
-      const topLevel = comments.filter((c) => !c.parentCommentId);
-      const repliesByParent = {};
-      for (const c of comments) {
-        if (c.parentCommentId) (repliesByParent[c.parentCommentId] ??= []).push(c);
-      }
+      const vote = (commentId, value) => {
+        fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments/${commentId}/vote`, {
+          method: "PUT",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({ value }),
+        })
+          .then((res) => {
+            if (!res.ok) throw new Error(`Vote failed: ${res.status}`);
+            return res.json();
+          })
+          .then(() => load())
+          .catch((err) => setError(err.message));
+      };
+
+      const report = (commentId, reason) => {
+        fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments/${commentId}/report`, {
+          method: "PUT",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({ reason }),
+        })
+          .then((res) => {
+            if (!res.ok) throw new Error(`Report failed: ${res.status}`);
+            return res.json();
+          })
+          .then(() => load())
+          .catch((err) => setError(err.message));
+      };
 
       return (
         <div className="card">
           <div className="header-row">
             <h1>Discussion Thread — PoC</h1>
-            {members.length > 0 && (
-              <label className="member-picker">
-                Viewing as
-                <select value={me} onChange={(e) => setMe(e.target.value)}>
-                  {members.map((m) => (
-                    <option key={m.memberId} value={m.memberId}>{m.memberName}</option>
-                  ))}
-                </select>
-              </label>
-            )}
+            <label className="member-picker">
+              Viewing as
+              <select value={me ?? ""} onChange={(e) => switchMember(e.target.value)}>
+                {members.map((m) => (
+                  <option key={m.memberId} value={m.memberId}>{m.memberName}</option>
+                ))}
+              </select>
+            </label>
           </div>
           <p className="thread-id">Thread: {THREAD_ID}</p>
 
           {status === "loading" && <p>Loading…</p>}
-          {error && <p className="status-fail">Error: {error}</p>}
+          {status === "error" && <p className="status-fail">Error: {error}</p>}
 
           <KarmaPanel board={karma} me={me} />
 
@@ -284,9 +356,10 @@
               <CommentRow
                 key={c.commentId}
                 comment={c}
-                replies={repliesByParent[c.commentId] || []}
+                replies={(repliesByParent[c.commentId] || []).map((r) => ({ ...r }))}
                 onDelete={deleteComment}
                 onVote={vote}
+                onReport={report}
                 replyingTo={replyingTo}
                 setReplyingTo={setReplyingTo}
                 replyDraft={replyDraft}

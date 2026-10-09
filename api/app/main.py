@@ -1,16 +1,16 @@
-import json
 import logging
 from uuid import UUID
-from fastapi import FastAPI, Header, HTTPException, Request
+
+from fastapi import FastAPI, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from . import db
-from .identity import MEMBERS, current_tenant_id, resolve_member
+from .db import DbError
+from .identity import STANDALONE_ENABLED, MEMBERS, mint_standalone_token, read_scope
 from .models import (
     Comment,
     CommentCreateRequest,
-    DeleteResult,
     KarmaEntry,
     ReportedComment,
     ReportRequest,
@@ -19,14 +19,13 @@ from .models import (
     VoteResult,
 )
 
-
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("api")
 
 app = FastAPI(
     title="Discussion Thread API",
     description="Discussion Thread microservice PoC — Swagger UI at /docs.",
-    version="0.2.0",
+    version="0.3.0",
 )
 
 # The UI is served from a different origin (localhost:8080) than the API
@@ -54,18 +53,78 @@ async def api_error_handler(_request: Request, exc: ApiError):
     )
 
 
+# Maps a DSC_* code (parsed from a THROW in one of the dsc.dsc_*_CRUD_JSON
+# procs) onto an HTTP status, the same role Program.cs's error handling
+# plays for EDP.
+_DB_ERROR_STATUS = {
+    "DSC_CONTEXT_REQUIRED": 401,
+    "DSC_THREAD_ID_REQUIRED": 400,
+    "DSC_BODY_REQUIRED": 400,
+    "DSC_PARENT_COMMENT_INVALID": 404,
+    "DSC_COMMENT_NOT_FOUND": 404,
+    "DSC_COMMENT_FORBIDDEN": 403,
+    "DSC_VOTE_VALUE_INVALID": 400,
+    "DSC_SELF_VOTE": 400,
+    "DSC_REPORT_REASON_REQUIRED": 400,
+    "DSC_REPORT_REASON_TOO_LONG": 400,
+    "DSC_SELF_REPORT": 400,
+    "DSC_ACTION_INVALID": 500,
+}
+
+
+def _raise_from_db_error(exc: DbError):
+    status_code = _DB_ERROR_STATUS.get(exc.code, 500)
+    raise ApiError(status_code, exc.code, exc.message) from exc
+
+
+def _require_scope(authorization: str | None):
+    scope = read_scope(authorization)
+    if scope is None:
+        raise ApiError(401, "DSC_UNAUTHENTICATED", "A valid Authorization: Bearer token is required.")
+    return scope
+
+
+def _require_permission(scope, permission: str):
+    if not scope.has(permission):
+        raise ApiError(
+            403,
+            "DSC_PERMISSION_REQUIRED",
+            f"This action requires the '{permission}' permission.",
+        )
+
+
 @app.get("/health")
 def health():
-    return {"status": "healthy"}
+    return {"service": "DSC", "version": "0.3.0", "status": "healthy"}
 
 
+@app.get("/readiness")
+def readiness():
+    if db.readiness_ok():
+        return {"status": "ready"}
+    raise ApiError(503, "DSC_NOT_READY", "dsc.dsc_Comment_CRUD_JSON is not installed yet.")
+
+
+# Teaching-only harness: mints a token for one of the seeded members so the
+# UI has something to send as Authorization: Bearer. Same role as EDP's
+# POST /standalone/context, and the same rule applies - DSC_STANDALONE_ENABLED
+# must only ever be true in local development. member_id lets the UI's
+# "viewing as" picker request a token for whichever seeded member is
+# selected; an unknown/omitted id falls back to the default member.
+@app.post("/standalone/context")
+def standalone_context(member_id: str | None = None):
+    if not STANDALONE_ENABLED:
+        raise ApiError(404, "DSC_NOT_FOUND", "Not found.")
+    return {"token": mint_standalone_token(member_id)}
+
+
+# Teaching-only: lets the UI build its "viewing as" picker without
+# hard-coding the roster client-side.
 @app.get("/members")
 def list_members():
-    """
-    DEV ONLY. The roster the UI's "viewing as" picker offers. Once JWT is
-    wired the caller's identity comes from the token and this disappears.
-    """
-    return [{"memberId": k, "memberName": v} for k, v in MEMBERS.items()]
+    if not STANDALONE_ENABLED:
+        raise ApiError(404, "DSC_NOT_FOUND", "Not found.")
+    return [{"memberId": member_id, "memberName": name} for member_id, name in MEMBERS.items()]
 
 
 @app.get(
@@ -73,14 +132,16 @@ def list_members():
     response_model=list[Comment],
     status_code=200,
 )
-def get_comments(thread_id: str, x_member_id: str | None = Header(default=None)):
-    tenant_id = current_tenant_id()
-    member_id, _ = resolve_member(x_member_id)
+def get_comments(thread_id: UUID, authorization: str | None = Header(default=None)):
+    scope = _require_scope(authorization)
+    _require_permission(scope, "dsc.comments.read")
     try:
-        rows = db.get_comments_by_thread(tenant_id, thread_id, member_id)
+        rows = db.list_comments(scope, thread_id.hex)
+    except DbError as exc:
+        _raise_from_db_error(exc)
     except Exception as exc:  # pragma: no cover - defensive
-        log.exception("GetByThread failed")
-        raise ApiError(500, "DB_ERROR", str(exc)) from exc
+        log.exception("List failed")
+        raise ApiError(500, "DSC_DB_ERROR", str(exc)) from exc
     return rows
 
 
@@ -90,34 +151,39 @@ def get_comments(thread_id: str, x_member_id: str | None = Header(default=None))
     status_code=201,
 )
 def create_comment(
-    thread_id: str,
+    thread_id: UUID,
     payload: CommentCreateRequest,
-    x_member_id: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
 ):
-    tenant_id = current_tenant_id()
-    member_id, author_name = resolve_member(x_member_id)
-    input_json = json.dumps(
-        {
-            "body": payload.body,
-            "authorName": author_name,
-            "parentCommentId": payload.parentCommentId,
-        }
-    )
+    scope = _require_scope(authorization)
+    _require_permission(scope, "dsc.comments.write")
     try:
-        created = db.create_comment(tenant_id, member_id, thread_id, input_json)
+        created = db.create_comment(scope, thread_id.hex, payload.body, payload.parentCommentId)
+    except DbError as exc:
+        _raise_from_db_error(exc)
     except Exception as exc:
-        msg = str(exc)
-        if "50002" in msg or "body is required" in msg:
-            raise ApiError(400, "VALIDATION", "body is required.") from exc
-        if "50003" in msg or "parentCommentId" in msg:
-            raise ApiError(
-                404, "NOT_FOUND", "parentCommentId not found, or is itself a reply."
-            ) from exc
         log.exception("Create failed")
-        raise ApiError(500, "DB_ERROR", msg) from exc
+        raise ApiError(500, "DSC_DB_ERROR", str(exc)) from exc
     if not created:
-        raise ApiError(500, "DB_ERROR", "Insert did not return a row.")
+        raise ApiError(500, "DSC_DB_ERROR", "Insert did not return a row.")
     return created
+
+
+@app.delete(
+    "/threads/{thread_id}/comments/{comment_id}",
+    status_code=204,
+)
+def delete_comment(thread_id: UUID, comment_id: UUID, authorization: str | None = Header(default=None)):
+    scope = _require_scope(authorization)
+    _require_permission(scope, "dsc.comments.delete")
+    try:
+        db.delete_comment(scope, comment_id.hex)
+    except DbError as exc:
+        _raise_from_db_error(exc)
+    except Exception as exc:
+        log.exception("Delete failed")
+        raise ApiError(500, "DSC_DB_ERROR", str(exc)) from exc
+    return None
 
 
 @app.put(
@@ -126,104 +192,65 @@ def create_comment(
     status_code=200,
 )
 def set_vote(
-    thread_id: str,
-    comment_id: str,
-    payload: VoteRequest,
-    x_member_id: str | None = Header(default=None),
-):
-    """
-    Like (1), dislike (-1) or clear (0) this member's vote on a comment.
-
-    PUT rather than POST: a member holds at most one vote per comment, so
-    the call sets that vote to a value and is idempotent — sending the same
-    value twice leaves the same single row.
-    """
-    tenant_id = current_tenant_id()
-    member_id, _ = resolve_member(x_member_id)
-    try:
-        result = db.set_comment_vote(
-            tenant_id, member_id, comment_id, json.dumps({"value": payload.value})
-        )
-    except Exception as exc:
-        msg = str(exc)
-        if "50021" in msg:
-            raise ApiError(
-                403, "FORBIDDEN", "You cannot vote on your own comment."
-            ) from exc
-        if "50004" in msg:
-            raise ApiError(404, "NOT_FOUND", "Comment not found.") from exc
-        if "50020" in msg:
-            raise ApiError(
-                400, "VALIDATION", "value must be 1, -1 or 0."
-            ) from exc
-        log.exception("Vote failed")
-        raise ApiError(500, "DB_ERROR", msg) from exc
-    if not result:
-        raise ApiError(500, "DB_ERROR", "Vote did not return a row.")
-    return result
-
-
-@app.get("/karma", response_model=list[KarmaEntry], status_code=200)
-def karma_leaderboard():
-    """Every member in the tenant who has posted, best karma first."""
-    tenant_id = current_tenant_id()
-    try:
-        return db.list_member_karma(tenant_id)
-    except Exception as exc:
-        log.exception("Karma list failed")
-        raise ApiError(500, "DB_ERROR", str(exc)) from exc
-
-
-@app.get("/members/{member_id}/karma", response_model=KarmaEntry, status_code=200)
-def member_karma(member_id: str):
-    tenant_id = current_tenant_id()
-    try:
-        result = db.get_member_karma(tenant_id, member_id)
-    except Exception as exc:
-        log.exception("Karma get failed")
-        raise ApiError(500, "DB_ERROR", str(exc)) from exc
-    if not result:
-        raise ApiError(404, "NOT_FOUND", "Member not found in this tenant.")
-    return result
-
-
-@app.delete(
-    "/threads/{thread_id}/comments/{comment_id}",
-    status_code=204,
-)
-def delete_comment(
     thread_id: UUID,
     comment_id: UUID,
-    x_member_id: str | None = Header(default=None),
+    payload: VoteRequest,
+    authorization: str | None = Header(default=None),
 ):
-    tenant_id = current_tenant_id()
-    member_id, _ = resolve_member(x_member_id)
+    # Both ids are typed as UUID (FastAPI 422s on anything malformed before
+    # this body runs) and both are passed through to the proc together, so
+    # a comment_id from a different thread than the one in the URL is
+    # rejected as DSC_COMMENT_NOT_FOUND rather than silently voting on it.
+    scope = _require_scope(authorization)
+    _require_permission(scope, "dsc.votes.write")
     try:
-        result = db.delete_comment(
-    tenant_id,
-    member_id,
-    str(thread_id),
-    str(comment_id),
-)
+        result = db.set_vote(scope, thread_id.hex, comment_id.hex, payload.value)
+    except DbError as exc:
+        _raise_from_db_error(exc)
     except Exception as exc:
-        msg = str(exc)
+        log.exception("Vote failed")
+        raise ApiError(500, "DSC_DB_ERROR", str(exc)) from exc
+    if not result:
+        raise ApiError(500, "DSC_DB_ERROR", "Vote did not return a row.")
+    return result
 
-        if "50005" in msg:
-            raise ApiError(
-                403, "FORBIDDEN", "Only the author can delete their comment."
-            ) from exc
 
-        if "50004" in msg:
-            raise ApiError(
-                404, "NOT_FOUND", "Comment does not exist in this tenant."
-            ) from exc
+@app.get(
+    "/karma",
+    response_model=list[KarmaEntry],
+    status_code=200,
+)
+def get_karma_leaderboard(authorization: str | None = Header(default=None)):
+    scope = _require_scope(authorization)
+    _require_permission(scope, "dsc.karma.read")
+    try:
+        rows = db.list_karma(scope)
+    except DbError as exc:
+        _raise_from_db_error(exc)
+    except Exception as exc:
+        log.exception("Karma list failed")
+        raise ApiError(500, "DSC_DB_ERROR", str(exc)) from exc
+    return rows
 
-        log.exception("Delete failed")
-        raise ApiError(500, "DB_ERROR", msg) from exc
-    if result.get("deleted", 0) == 0:
-        raise ApiError(404, "NOT_FOUND", "Comment does not exist in this tenant.")
-    return None
 
+@app.get(
+    "/members/{member_id}/karma",
+    response_model=KarmaEntry,
+    status_code=200,
+)
+def get_member_karma(member_id: UUID, authorization: str | None = Header(default=None)):
+    scope = _require_scope(authorization)
+    _require_permission(scope, "dsc.karma.read")
+    try:
+        result = db.get_member_karma(scope, member_id.hex)
+    except DbError as exc:
+        _raise_from_db_error(exc)
+    except Exception as exc:
+        log.exception("Karma get failed")
+        raise ApiError(500, "DSC_DB_ERROR", str(exc)) from exc
+    if not result:
+        raise ApiError(500, "DSC_DB_ERROR", "Karma lookup did not return a row.")
+    return result
 
 
 @app.put(
@@ -232,59 +259,43 @@ def delete_comment(
     status_code=200,
 )
 def report_comment(
-    thread_id: str,
-    comment_id: str,
+    thread_id: UUID,
+    comment_id: UUID,
     payload: ReportRequest,
-    x_member_id: str | None = Header(default=None),
+    authorization: str | None = Header(default=None),
 ):
-    """
-    Flag a comment for moderator attention, with a reason.
-
-    PUT rather than POST, for the same reason the vote endpoint is a PUT:
-    a member holds at most one flag per comment, so the call sets that flag
-    and is idempotent - sending it twice leaves the same single row with an
-    updated reason, rather than inflating the count.
-
-    A member cannot flag their own comment, and cannot flag a comment in
-    another tenant. Both are refused by the database, not by this handler.
-    """
-    tenant_id = current_tenant_id()
-    member_id, _ = resolve_member(x_member_id)
+    # Same fix as /vote above (this is the exact pair of bugs Ali flagged
+    # in review): thread_id and comment_id are both UUID-typed, so a
+    # malformed id 422s instead of reaching SQL, and both are validated
+    # together against the comment's real thread rather than thread_id
+    # being accepted and then ignored.
+    scope = _require_scope(authorization)
+    _require_permission(scope, "dsc.reports.write")
     try:
-        result = db.set_comment_report(
-            tenant_id, member_id, comment_id, json.dumps({"reason": payload.reason})
-        )
+        result = db.set_report(scope, thread_id.hex, comment_id.hex, payload.reason)
+    except DbError as exc:
+        _raise_from_db_error(exc)
     except Exception as exc:
-        msg = str(exc)
-        if "50030" in msg:
-            raise ApiError(
-                403, "FORBIDDEN", "You cannot report your own comment."
-            ) from exc
-        if "50004" in msg:
-            raise ApiError(404, "NOT_FOUND", "Comment not found.") from exc
-        if "50031" in msg:
-            raise ApiError(400, "VALIDATION", "reason is required.") from exc
-        if "50032" in msg:
-            raise ApiError(
-                400, "VALIDATION", "reason must be 500 characters or fewer."
-            ) from exc
         log.exception("Report failed")
-        raise ApiError(500, "DB_ERROR", msg) from exc
+        raise ApiError(500, "DSC_DB_ERROR", str(exc)) from exc
     if not result:
-        raise ApiError(500, "DB_ERROR", "Report did not return a row.")
+        raise ApiError(500, "DSC_DB_ERROR", "Report did not return a row.")
     return result
 
 
-@app.get("/reports", response_model=list[ReportedComment], status_code=200)
-def list_reports():
-    """
-    The moderation queue: every comment in this tenant carrying at least one
-    flag, most-reported first. Scoped to the caller's tenant, so one
-    organisation's moderators never see another's content.
-    """
-    tenant_id = current_tenant_id()
+@app.get(
+    "/reports",
+    response_model=list[ReportedComment],
+    status_code=200,
+)
+def list_reports(authorization: str | None = Header(default=None)):
+    scope = _require_scope(authorization)
+    _require_permission(scope, "dsc.reports.read")
     try:
-        return db.list_comment_reports(tenant_id)
+        rows = db.list_reports(scope)
+    except DbError as exc:
+        _raise_from_db_error(exc)
     except Exception as exc:
         log.exception("Report list failed")
-        raise ApiError(500, "DB_ERROR", str(exc)) from exc
+        raise ApiError(500, "DSC_DB_ERROR", str(exc)) from exc
+    return rows

@@ -1,53 +1,148 @@
 """
-Tenant/member identity. Per the plan's "decisions to settle before coding":
-these come from JWT claims once auth is wired; until then they are
-hard-coded constants so nothing above this layer has to be refactored
-later. Never accept tenantId / authorMemberId from the request body.
+Identity for this API, mirroring the Cobbled EDP reference module's pattern
+(see api/Program.cs's ReadScopeAsync / the /standalone/context harness in
+Cobbled-EDP-3.0.0): the API never trusts tenantId/memberId from the request
+body or from hard-coded constants. It reads them from a signed token.
 
-These match the seed data in sql/init/init.sql.
+Production shape (not fully real here - see below):
+  1. A host shell delivers a signed token to the UI.
+  2. The UI sends it as `Authorization: Bearer <token>`.
+  3. This module validates the signature/issuer/audience/expiry and returns
+     a Scope (tenantId, memberId, permissions).
+  4. db.py pushes tenantId/memberId into SQL via sp_set_session_context;
+     the stored procedure reads them back out of SESSION_CONTEXT, never as
+     parameters.
+
+What's NOT real here: there is no actual "Cobbled platform" issuing tokens
+for this course PoC. DSC_STANDALONE_ENABLED turns on a teaching-only
+endpoint (/standalone/context, same idea as EDP's) that mints a token for
+one of a small roster of seeded members so the UI has something to send
+and can let the person testing it switch "viewing as" between them. That
+endpoint must never be enabled outside local development - same rule EDP
+documents for its own standalone harness.
 """
+import os
+import time
+import uuid
+from dataclasses import dataclass, field
 
-DEFAULT_TENANT_ID = "11111111-1111-1111-1111-111111111111"
-DEFAULT_MEMBER_ID = "30000000-0000-0000-0000-000000000001"
-DEFAULT_AUTHOR_NAME = "Jane"
+import jwt
 
-# Hard-coded single thread for the PoC (per "Thread scope" decision —
-# don't build thread listing).
-DEFAULT_THREAD_ID = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+SIGNING_KEY_BASE64 = os.environ.get("DSC_SECURITY_SIGNING_KEY_BASE64", "")
+ISSUER = os.environ.get("DSC_SECURITY_ISSUER", "dsc-standalone")
+AUDIENCE = os.environ.get("DSC_SECURITY_AUDIENCE", "dsc-widget")
+STANDALONE_ENABLED = os.environ.get("DSC_STANDALONE_ENABLED", "false").lower() == "true"
 
-# The roster of members in the seeded tenant. Karma only means something
-# when more than one person can vote, so the PoC ships three. When JWT
-# lands this whole table goes away: the id and name come from the token.
+# Seed identity for the standalone harness - matches sql/no-rls/build.sql's seed data.
+DEFAULT_TENANT_ID = "11111111111111111111111111111111"
+DEFAULT_THREAD_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+# The standalone harness's full member roster - char32 ids matching the
+# Tenant A seed rows in sql/no-rls/build.sql (dsc.dsc_CommentVote's seeded
+# likes/dislikes reference these same three members). Lets the UI's
+# "viewing as" picker mint a token for whichever member is selected,
+# instead of only ever acting as a single fixed member.
 MEMBERS = {
-    "30000000-0000-0000-0000-000000000001": "Jane",
-    "30000000-0000-0000-0000-000000000002": "Sam",
-    "30000000-0000-0000-0000-000000000003": "Alex",
+    "30000000000000000000000000000001": "Jane",
+    "30000000000000000000000000000002": "Sam",
+    "30000000000000000000000000000003": "Alex",
 }
+DEFAULT_MEMBER_ID = "30000000000000000000000000000001"
+DEFAULT_AUTHOR_NAME = MEMBERS[DEFAULT_MEMBER_ID]
+
+ALL_PERMISSIONS = [
+    "dsc.comments.read",
+    "dsc.comments.write",
+    "dsc.comments.delete",
+    "dsc.votes.write",
+    "dsc.karma.read",
+    "dsc.reports.write",
+    "dsc.reports.read",
+]
 
 
-def current_tenant_id() -> str:
-    return DEFAULT_TENANT_ID
+@dataclass
+class Scope:
+    tenant_id: str
+    member_id: str
+    author_name: str
+    permissions: set = field(default_factory=set)
+
+    def has(self, permission: str) -> bool:
+        return permission in self.permissions
 
 
-def resolve_member(override_id: str | None = None) -> tuple[str, str]:
+def _signing_key() -> bytes:
+    import base64
+
+    if not SIGNING_KEY_BASE64:
+        raise RuntimeError("DSC_SECURITY_SIGNING_KEY_BASE64 is not set.")
+    return base64.b64decode(SIGNING_KEY_BASE64)
+
+
+def read_scope(authorization_header: str | None) -> Scope | None:
     """
-    Returns (memberId, displayName) for the caller.
-
-    DEV ONLY: an X-Member-Id header may name any member in MEMBERS, so the
-    board can be exercised as different people without an auth server. An
-    unknown or absent value falls back to the default member, so the header
-    can never inject an identity that does not exist. This is exactly the
-    shape the JWT claim lookup will have, which is why it lives here rather
-    than in the route handlers.
+    Parses an `Authorization: Bearer <token>` header into a Scope, or
+    returns None if the header is missing or the token fails validation.
+    Mirrors Program.cs's ReadScopeAsync.
     """
-    if override_id and override_id in MEMBERS:
-        return override_id, MEMBERS[override_id]
-    return DEFAULT_MEMBER_ID, MEMBERS[DEFAULT_MEMBER_ID]
+    if not authorization_header or not authorization_header.lower().startswith("bearer "):
+        return None
+    token = authorization_header[7:]
+    try:
+        claims = jwt.decode(
+            token,
+            _signing_key(),
+            algorithms=["HS256"],
+            issuer=ISSUER,
+            audience=AUDIENCE,
+            options={"require": ["exp", "iat"]},
+            leeway=30,
+        )
+    except jwt.PyJWTError:
+        return None
+
+    tenant_id = claims.get("tenant_id")
+    member_id = claims.get("member_id")
+    if not isinstance(tenant_id, str) or len(tenant_id) != 32:
+        return None
+    if not isinstance(member_id, str) or len(member_id) != 32:
+        return None
+
+    permissions = claims.get("permissions") or []
+    if isinstance(permissions, str):
+        permissions = [permissions]
+
+    return Scope(
+        tenant_id=tenant_id,
+        member_id=member_id,
+        author_name=claims.get("author_name") or "Member",
+        permissions=set(permissions),
+    )
 
 
-def current_member_id(override_id: str | None = None) -> str:
-    return resolve_member(override_id)[0]
-
-
-def current_author_name(override_id: str | None = None) -> str:
-    return resolve_member(override_id)[1]
+def mint_standalone_token(member_id: str | None = None) -> str:
+    """
+    Dev-only token for the teaching harness - same role as EDP's
+    POST /standalone/context. Grants every dsc.* permission to whichever
+    seeded member is chosen (falls back to the default member if the
+    given id isn't in the roster); there is no real login flow to check
+    against yet.
+    """
+    if not STANDALONE_ENABLED:
+        raise RuntimeError("Standalone context minting is disabled.")
+    if member_id not in MEMBERS:
+        member_id = DEFAULT_MEMBER_ID
+    now = int(time.time())
+    claims = {
+        "iss": ISSUER,
+        "aud": AUDIENCE,
+        "iat": now,
+        "exp": now + 2 * 60 * 60,
+        "jti": uuid.uuid4().hex,
+        "tenant_id": DEFAULT_TENANT_ID,
+        "member_id": member_id,
+        "author_name": MEMBERS[member_id],
+        "permissions": ALL_PERMISSIONS,
+    }
+    return jwt.encode(claims, _signing_key(), algorithm="HS256")

@@ -28,6 +28,10 @@ class CommentCreateRequest(BaseModel):
     parentCommentId: Optional[str] = None
 
 
+class DeleteResult(BaseModel):
+    deleted: int
+
+
 class VoteRequest(BaseModel):
     # 1 = like, -1 = dislike, 0 = clear my vote. Pressing an already-active
     # button sends 0, which is how the UI implements toggle-off.
@@ -51,16 +55,6 @@ class KarmaEntry(BaseModel):
     likesReceived: int
     dislikesReceived: int
     karma: int
-
-
-class DeleteResult(BaseModel):
-    deleted: int
-
-
-class ErrorResponse(BaseModel):
-    error: str
-    message: str
-
 
 
 class ReportRequest(BaseModel):
@@ -93,3 +87,8 @@ class ReportedComment(BaseModel):
     isDeleted: bool
     reportCount: int
     lastReportedUtc: datetime
+
+
+class ErrorResponse(BaseModel):
+    error: str
+    message: str
