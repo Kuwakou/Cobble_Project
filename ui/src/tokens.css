@@ -168,6 +168,7 @@ body {
   cursor: pointer;
   color: var(--cobble-color-text);
 }
+.btn-vote:hover:not(:disabled) { border-color: var(--cobble-color-primary); }
 .btn-vote.active-up { border-color: var(--cobble-color-success); color: var(--cobble-color-success); }
 .btn-vote.active-down { border-color: var(--cobble-color-danger); color: var(--cobble-color-danger); }
 .btn-vote:disabled { opacity: 0.4; cursor: not-allowed; }
