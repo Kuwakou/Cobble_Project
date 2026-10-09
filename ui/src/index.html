@@ -25,19 +25,88 @@
     const THREAD_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const API_BASE_URL = window.API_BASE_URL || "http://localhost:8080";
 
-    function CommentRow({ comment, replies, onDelete, replyingTo, setReplyingTo, replyDraft, setReplyDraft, onReply }) {
+    function VoteButtons({ comment, onVote }) {
+      const disabled = comment.isOwn;
+      return (
+        <span className="vote-buttons">
+          <button
+            className={"btn-vote" + (comment.myVote === 1 ? " active-up" : "")}
+            disabled={disabled}
+            title={disabled ? "You can't vote on your own comment" : "Like"}
+            onClick={() => onVote(comment.commentId, comment.myVote === 1 ? 0 : 1)}
+          >
+            👍 {comment.likes}
+          </button>
+          <button
+            className={"btn-vote" + (comment.myVote === -1 ? " active-down" : "")}
+            disabled={disabled}
+            title={disabled ? "You can't vote on your own comment" : "Dislike"}
+            onClick={() => onVote(comment.commentId, comment.myVote === -1 ? 0 : -1)}
+          >
+            👎 {comment.dislikes}
+          </button>
+          <span className="vote-score">{comment.score > 0 ? `+${comment.score}` : comment.score}</span>
+        </span>
+      );
+    }
+
+    function ReportControl({ comment, onReport }) {
+      const [open, setOpen] = useState(false);
+      const [reason, setReason] = useState("");
+      if (comment.isOwn) return null;
+      return (
+        <>
+          <button
+            className={"btn-report" + (comment.myReport ? " reported" : "")}
+            onClick={() => setOpen(!open)}
+          >
+            {comment.myReport ? "Reported" : "Report"}
+            {comment.reportCount > 0 ? ` (${comment.reportCount})` : ""}
+          </button>
+          {open && (
+            <form
+              className="report-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (!reason.trim()) return;
+                onReport(comment.commentId, reason);
+                setReason("");
+                setOpen(false);
+              }}
+            >
+              <input
+                type="text"
+                placeholder="Why are you reporting this?"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+              />
+              <button type="submit" className="btn-add">Send</button>
+            </form>
+          )}
+        </>
+      );
+    }
+
+    function CommentRow({ comment, replies, onDelete, onVote, onReport, replyingTo, setReplyingTo, replyDraft, setReplyDraft, onReply }) {
       const isReplying = replyingTo === comment.commentId;
       return (
         <div className="comment-row">
           <div className="comment-meta">
-            <span className="comment-author">{comment.authorName}</span>
+            <span className="comment-author">
+              {comment.authorName}
+              <span className="karma-badge">karma {comment.authorKarma}</span>
+            </span>
             <span className="comment-time">{new Date(comment.createdUtc).toLocaleString()}</span>
           </div>
           <div className="comment-body">{comment.body}</div>
-          <button className="btn-delete" onClick={() => onDelete(comment.commentId)}>Delete</button>
+          <VoteButtons comment={comment} onVote={onVote} />
+          {comment.isOwn && (
+            <button className="btn-delete" onClick={() => onDelete(comment.commentId)}>Delete</button>
+          )}
           <button className="btn-reply" onClick={() => setReplyingTo(isReplying ? null : comment.commentId)}>
             {isReplying ? "Cancel" : "Reply"}
           </button>
+          <ReportControl comment={comment} onReport={onReport} />
 
           {isReplying && (
             <form className="reply-form" onSubmit={(e) => { e.preventDefault(); onReply(comment.commentId); }}>
@@ -56,11 +125,18 @@
               {replies.map((r) => (
                 <div key={r.commentId} className="comment-row reply-row">
                   <div className="comment-meta">
-                    <span className="comment-author">{r.authorName}</span>
+                    <span className="comment-author">
+                      {r.authorName}
+                      <span className="karma-badge">karma {r.authorKarma}</span>
+                    </span>
                     <span className="comment-time">{new Date(r.createdUtc).toLocaleString()}</span>
                   </div>
                   <div className="comment-body">{r.body}</div>
-                  <button className="btn-delete" onClick={() => onDelete(r.commentId)}>Delete</button>
+                  <VoteButtons comment={r} onVote={onVote} />
+                  {r.isOwn && (
+                    <button className="btn-delete" onClick={() => onDelete(r.commentId)}>Delete</button>
+                  )}
+                  <ReportControl comment={r} onReport={onReport} />
                 </div>
               ))}
             </div>
@@ -69,47 +145,105 @@
       );
     }
 
+    function KarmaPanel({ board, me }) {
+      if (!board.length) return null;
+      return (
+        <div className="karma-panel">
+          <table>
+            <thead>
+              <tr><th>Member</th><th>Posts</th><th>👍</th><th>👎</th><th>Karma</th></tr>
+            </thead>
+            <tbody>
+              {board.map((row) => (
+                <tr key={row.memberId} className={row.memberId === me ? "is-me" : ""}>
+                  <td>{row.memberName}</td>
+                  <td>{row.commentCount}</td>
+                  <td>{row.likesReceived}</td>
+                  <td>{row.dislikesReceived}</td>
+                  <td>{row.karma}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    }
+
     function App() {
       const [comments, setComments] = useState([]);
+      const [karma, setKarma] = useState([]);
+      const [members, setMembers] = useState([]);
       const [draft, setDraft] = useState("");
       const [status, setStatus] = useState("loading");
       const [error, setError] = useState(null);
 
-      // The API now requires a signed identity (Authorization: Bearer <token>)
+      // The API requires a signed identity (Authorization: Bearer <token>)
       // on every call, like EDP's host-context model. There is no real host
-      // shell issuing that token for this PoC, so on first load the UI asks
-      // the API's dev-only /standalone/context endpoint for one - same
-      // teaching-harness role as EDP's own /standalone page. The token lives
-      // only in memory (a React ref), never in browser storage.
+      // shell issuing that token for this PoC, so the UI asks the API's
+      // dev-only /standalone/context endpoint for one - same teaching-
+      // harness role as EDP's own /standalone page. The token lives only
+      // in memory (React state), never in browser storage. Switching the
+      // "viewing as" member re-requests a token for that member instead of
+      // sending an X-Member-Id header, since the API only trusts identity
+      // carried in the signed token now.
+      const [me, setMe] = useState(null);
       const [token, setToken] = useState(null);
       const authHeaders = useCallback(
         (extra = {}) => (token ? { Authorization: `Bearer ${token}`, ...extra } : extra),
         [token]
       );
 
-      useEffect(() => {
-        fetch(`${API_BASE_URL}/standalone/context`, { method: "POST" })
+      const fetchToken = useCallback((memberId) => {
+        const qs = memberId ? `?member_id=${encodeURIComponent(memberId)}` : "";
+        return fetch(`${API_BASE_URL}/standalone/context${qs}`, { method: "POST" })
           .then((res) => {
             if (!res.ok) throw new Error(`Could not get a dev token: ${res.status}`);
             return res.json();
           })
-          .then((data) => setToken(data.token))
+          .then((data) => setToken(data.token));
+      }, []);
+
+      useEffect(() => {
+        fetch(`${API_BASE_URL}/members`)
+          .then((res) => {
+            if (!res.ok) throw new Error(`Could not load members: ${res.status}`);
+            return res.json();
+          })
+          .then((data) => {
+            setMembers(data);
+            const first = data[0];
+            if (first) {
+              setMe(first.memberId);
+              return fetchToken(first.memberId);
+            }
+          })
           .catch((err) => {
             setStatus("error");
             setError(err.message);
           });
-      }, []);
+      }, [fetchToken]);
+
+      const switchMember = (memberId) => {
+        setMe(memberId);
+        fetchToken(memberId).catch((err) => setError(err.message));
+      };
 
       const load = useCallback(() => {
         if (!token) return;
         setStatus("loading");
-        fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments`, { headers: authHeaders() })
-          .then((res) => {
-            if (!res.ok) throw new Error(`GET failed: ${res.status}`);
+        Promise.all([
+          fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments`, { headers: authHeaders() }).then((res) => {
+            if (!res.ok) throw new Error(`GET comments failed: ${res.status}`);
             return res.json();
-          })
-          .then((data) => {
-            setComments(data);
+          }),
+          fetch(`${API_BASE_URL}/karma`, { headers: authHeaders() }).then((res) => {
+            if (!res.ok) throw new Error(`GET karma failed: ${res.status}`);
+            return res.json();
+          }),
+        ])
+          .then(([commentRows, karmaRows]) => {
+            setComments(commentRows.map((c) => ({ ...c, isOwn: c.authorMemberId === me })));
+            setKarma(karmaRows);
             setStatus("ready");
             setError(null);
           })
@@ -117,7 +251,7 @@
             setStatus("error");
             setError(err.message);
           });
-      }, [token, authHeaders]);
+      }, [token, me, authHeaders]);
 
       useEffect(() => {
         load();
@@ -169,21 +303,63 @@
           .catch((err) => setError(err.message));
       };
 
+      const vote = (commentId, value) => {
+        fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments/${commentId}/vote`, {
+          method: "PUT",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({ value }),
+        })
+          .then((res) => {
+            if (!res.ok) throw new Error(`Vote failed: ${res.status}`);
+            return res.json();
+          })
+          .then(() => load())
+          .catch((err) => setError(err.message));
+      };
+
+      const report = (commentId, reason) => {
+        fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments/${commentId}/report`, {
+          method: "PUT",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({ reason }),
+        })
+          .then((res) => {
+            if (!res.ok) throw new Error(`Report failed: ${res.status}`);
+            return res.json();
+          })
+          .then(() => load())
+          .catch((err) => setError(err.message));
+      };
+
       return (
         <div className="card">
-          <h1>Discussion Thread — PoC</h1>
+          <div className="header-row">
+            <h1>Discussion Thread — PoC</h1>
+            <label className="member-picker">
+              Viewing as
+              <select value={me ?? ""} onChange={(e) => switchMember(e.target.value)}>
+                {members.map((m) => (
+                  <option key={m.memberId} value={m.memberId}>{m.memberName}</option>
+                ))}
+              </select>
+            </label>
+          </div>
           <p className="thread-id">Thread: {THREAD_ID}</p>
 
           {status === "loading" && <p>Loading…</p>}
           {status === "error" && <p className="status-fail">Error: {error}</p>}
+
+          <KarmaPanel board={karma} me={me} />
 
           <div className="comment-list">
             {topLevel.map((c) => (
               <CommentRow
                 key={c.commentId}
                 comment={c}
-                replies={repliesByParent[c.commentId] || []}
+                replies={(repliesByParent[c.commentId] || []).map((r) => ({ ...r }))}
                 onDelete={deleteComment}
+                onVote={vote}
+                onReport={report}
                 replyingTo={replyingTo}
                 setReplyingTo={setReplyingTo}
                 replyDraft={replyDraft}

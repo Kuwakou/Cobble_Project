@@ -3,11 +3,11 @@ Thin data-access layer, mirroring Program.cs's ExecuteCrudAsync in the
 Cobbled EDP reference module.
 
 The API never writes SELECT/INSERT/UPDATE/DELETE against tables directly -
-it only EXECs dsc.dsc_Comment_CRUD_JSON (sql/no-rls/build.sql or
-sql/rls/build.sql), and the identity it hands that proc comes from the
-caller's validated Scope, pushed into the connection via
-sys.sp_set_session_context - never as explicit stored-procedure parameters,
-and never from the request body.
+it only EXECs the dsc.dsc_*_CRUD_JSON procs (sql/no-rls/build.sql or
+sql/rls/build.sql), and the identity it hands them comes from the caller's
+validated Scope, pushed into the connection via sys.sp_set_session_context -
+never as explicit stored-procedure parameters, and never from the request
+body.
 """
 import json
 import os
@@ -46,12 +46,12 @@ def _connect():
     )
 
 
-def _exec_crud(scope: Scope, action: str, payload: dict):
+def _exec_crud(scope: Scope, proc_name: str, action: str, payload: dict):
     """
     Sets TenantID/MemberID into SESSION_CONTEXT for this connection, then
-    calls dsc.dsc_Comment_CRUD_JSON. SQL Server splits a long FOR JSON
-    result across multiple rows/columns, so every row's single column is
-    concatenated before parsing (same quirk as before).
+    calls the given dsc.dsc_*_CRUD_JSON proc. SQL Server splits a long
+    FOR JSON result across multiple rows/columns, so every row's single
+    column is concatenated before parsing (same quirk as before).
     """
     conn = _connect()
     try:
@@ -66,7 +66,7 @@ def _exec_crud(scope: Scope, action: str, payload: dict):
         )
         try:
             cursor.execute(
-                "EXEC dsc.dsc_Comment_CRUD_JSON @Action=%s, @Payload=%s",
+                f"EXEC {proc_name} @Action=%s, @Payload=%s",
                 (action, json.dumps(payload)),
             )
         except pymssql.Error as exc:
@@ -86,7 +86,7 @@ def readiness_ok() -> bool:
     """Diagnostic existence check only - mirrors EDP's /readiness probe
     (SELECT IIF(OBJECT_ID(...) IS NULL,0,1)). Not a business-data query, so
     this is the one place this module is allowed to run SQL that isn't a
-    call to dsc.dsc_Comment_CRUD_JSON."""
+    call to one of the dsc.dsc_*_CRUD_JSON procs."""
     try:
         conn = _connect()
         try:
@@ -102,14 +102,17 @@ def readiness_ok() -> bool:
         return False
 
 
+# --- comments -----------------------------------------------------------
+
 def list_comments(scope: Scope, thread_id: str):
-    result = _exec_crud(scope, "SELECT", {"threadId": thread_id})
+    result = _exec_crud(scope, "dsc.dsc_Comment_CRUD_JSON", "SELECT", {"threadId": thread_id})
     return result or []
 
 
 def create_comment(scope: Scope, thread_id: str, body: str, parent_comment_id: str | None):
     return _exec_crud(
         scope,
+        "dsc.dsc_Comment_CRUD_JSON",
         "INSERT",
         {
             "threadId": thread_id,
@@ -121,4 +124,42 @@ def create_comment(scope: Scope, thread_id: str, body: str, parent_comment_id: s
 
 
 def delete_comment(scope: Scope, comment_id: str):
-    return _exec_crud(scope, "DELETE", {"commentId": comment_id})
+    return _exec_crud(scope, "dsc.dsc_Comment_CRUD_JSON", "DELETE", {"commentId": comment_id})
+
+
+# --- votes ----------------------------------------------------------------
+
+def set_vote(scope: Scope, thread_id: str, comment_id: str, value: int):
+    return _exec_crud(
+        scope,
+        "dsc.dsc_CommentVote_CRUD_JSON",
+        "SET",
+        {"threadId": thread_id, "commentId": comment_id, "value": value},
+    )
+
+
+# --- karma ------------------------------------------------------------
+
+def get_member_karma(scope: Scope, member_id: str):
+    return _exec_crud(scope, "dsc.dsc_MemberKarma_CRUD_JSON", "GET", {"memberId": member_id})
+
+
+def list_karma(scope: Scope):
+    result = _exec_crud(scope, "dsc.dsc_MemberKarma_CRUD_JSON", "LIST", {})
+    return result or []
+
+
+# --- reports ----------------------------------------------------------
+
+def set_report(scope: Scope, thread_id: str, comment_id: str, reason: str):
+    return _exec_crud(
+        scope,
+        "dsc.dsc_CommentReport_CRUD_JSON",
+        "SET",
+        {"threadId": thread_id, "commentId": comment_id, "reason": reason},
+    )
+
+
+def list_reports(scope: Scope):
+    result = _exec_crud(scope, "dsc.dsc_CommentReport_CRUD_JSON", "LIST", {})
+    return result or []

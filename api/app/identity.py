@@ -16,9 +16,10 @@ Production shape (not fully real here - see below):
 What's NOT real here: there is no actual "Cobbled platform" issuing tokens
 for this course PoC. DSC_STANDALONE_ENABLED turns on a teaching-only
 endpoint (/standalone/context, same idea as EDP's) that mints a token for
-the single seeded member so the UI has something to send. That endpoint
-must never be enabled outside local development - same rule EDP documents
-for its own standalone harness.
+one of a small roster of seeded members so the UI has something to send
+and can let the person testing it switch "viewing as" between them. That
+endpoint must never be enabled outside local development - same rule EDP
+documents for its own standalone harness.
 """
 import os
 import time
@@ -34,11 +35,30 @@ STANDALONE_ENABLED = os.environ.get("DSC_STANDALONE_ENABLED", "false").lower() =
 
 # Seed identity for the standalone harness - matches sql/no-rls/build.sql's seed data.
 DEFAULT_TENANT_ID = "11111111111111111111111111111111"
-DEFAULT_MEMBER_ID = "30000000000000000000000000000001"
-DEFAULT_AUTHOR_NAME = "Jane"
 DEFAULT_THREAD_ID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
-ALL_PERMISSIONS = ["dsc.comments.read", "dsc.comments.write", "dsc.comments.delete"]
+# The standalone harness's full member roster - char32 ids matching the
+# Tenant A seed rows in sql/no-rls/build.sql (dsc.dsc_CommentVote's seeded
+# likes/dislikes reference these same three members). Lets the UI's
+# "viewing as" picker mint a token for whichever member is selected,
+# instead of only ever acting as a single fixed member.
+MEMBERS = {
+    "30000000000000000000000000000001": "Jane",
+    "30000000000000000000000000000002": "Sam",
+    "30000000000000000000000000000003": "Alex",
+}
+DEFAULT_MEMBER_ID = "30000000000000000000000000000001"
+DEFAULT_AUTHOR_NAME = MEMBERS[DEFAULT_MEMBER_ID]
+
+ALL_PERMISSIONS = [
+    "dsc.comments.read",
+    "dsc.comments.write",
+    "dsc.comments.delete",
+    "dsc.votes.write",
+    "dsc.karma.read",
+    "dsc.reports.write",
+    "dsc.reports.read",
+]
 
 
 @dataclass
@@ -101,14 +121,18 @@ def read_scope(authorization_header: str | None) -> Scope | None:
     )
 
 
-def mint_standalone_token() -> str:
+def mint_standalone_token(member_id: str | None = None) -> str:
     """
     Dev-only token for the teaching harness - same role as EDP's
-    POST /standalone/context. Grants every dsc.comments.* permission to the
-    single seeded member; there is no real login flow to check against yet.
+    POST /standalone/context. Grants every dsc.* permission to whichever
+    seeded member is chosen (falls back to the default member if the
+    given id isn't in the roster); there is no real login flow to check
+    against yet.
     """
     if not STANDALONE_ENABLED:
         raise RuntimeError("Standalone context minting is disabled.")
+    if member_id not in MEMBERS:
+        member_id = DEFAULT_MEMBER_ID
     now = int(time.time())
     claims = {
         "iss": ISSUER,
@@ -117,8 +141,8 @@ def mint_standalone_token() -> str:
         "exp": now + 2 * 60 * 60,
         "jti": uuid.uuid4().hex,
         "tenant_id": DEFAULT_TENANT_ID,
-        "member_id": DEFAULT_MEMBER_ID,
-        "author_name": DEFAULT_AUTHOR_NAME,
+        "member_id": member_id,
+        "author_name": MEMBERS[member_id],
         "permissions": ALL_PERMISSIONS,
     }
     return jwt.encode(claims, _signing_key(), algorithm="HS256")

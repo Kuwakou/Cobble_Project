@@ -128,3 +128,84 @@ body {
   padding: var(--cobble-space-sm) var(--cobble-space-md);
   cursor: pointer;
 }
+
+/* --- member picker ------------------------------------------------- */
+.header-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--cobble-space-sm);
+  flex-wrap: wrap;
+}
+.member-picker {
+  display: flex;
+  align-items: center;
+  gap: var(--cobble-space-xs);
+  font-size: 12px;
+  color: var(--cobble-color-muted);
+}
+.member-picker select {
+  padding: 2px 6px;
+  border-radius: var(--cobble-radius-md);
+  border: 1px solid var(--cobble-color-muted);
+  background: var(--cobble-color-bg);
+  color: var(--cobble-color-text);
+}
+
+/* --- votes ----------------------------------------------------------- */
+.vote-buttons {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: var(--cobble-space-sm);
+}
+.btn-vote {
+  background: transparent;
+  border: 1px solid var(--cobble-color-muted);
+  border-radius: var(--cobble-radius-md);
+  padding: 2px 6px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--cobble-color-text);
+}
+.btn-vote.active-up { border-color: var(--cobble-color-success); color: var(--cobble-color-success); }
+.btn-vote.active-down { border-color: var(--cobble-color-danger); color: var(--cobble-color-danger); }
+.btn-vote:disabled { opacity: 0.4; cursor: not-allowed; }
+.vote-score { font-size: 12px; color: var(--cobble-color-muted); min-width: 18px; text-align: center; }
+
+/* --- karma ------------------------------------------------------------ */
+.karma-badge {
+  font-size: 11px;
+  color: var(--cobble-color-muted);
+  margin-left: 6px;
+}
+.karma-panel {
+  margin: var(--cobble-space-md) 0;
+  padding: var(--cobble-space-sm) var(--cobble-space-md);
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: var(--cobble-radius-md);
+}
+.karma-panel table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.karma-panel th, .karma-panel td { text-align: left; padding: 2px 6px; }
+.karma-panel th { color: var(--cobble-color-muted); font-weight: 600; font-size: 11px; }
+.karma-panel tr.is-me { color: var(--cobble-color-primary); font-weight: 600; }
+
+/* --- reports ----------------------------------------------------------- */
+.btn-report {
+  margin-top: var(--cobble-space-xs);
+  margin-left: 6px;
+  background: transparent;
+  color: var(--cobble-color-muted);
+  border: 1px solid var(--cobble-color-muted);
+  border-radius: var(--cobble-radius-md);
+  padding: 2px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.btn-report.reported { color: var(--cobble-color-danger); border-color: var(--cobble-color-danger); }
+.report-form {
+  display: flex;
+  gap: var(--cobble-space-sm);
+  margin-top: var(--cobble-space-xs);
+}
+.report-form input { flex: 1; }
