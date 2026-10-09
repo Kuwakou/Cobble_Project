@@ -60,3 +60,36 @@ class DeleteResult(BaseModel):
 class ErrorResponse(BaseModel):
     error: str
     message: str
+
+
+
+class ReportRequest(BaseModel):
+    # The moderator needs to know why a comment was flagged, so a reason is
+    # mandatory rather than optional. Length is capped here and again in the
+    # procedure, because the API is not the only possible caller.
+    reason: str = Field(..., min_length=1, max_length=500)
+
+
+class ReportResult(BaseModel):
+    commentId: str
+    authorMemberId: str
+    # How many distinct members have flagged this comment, and whether the
+    # caller is one of them, so the UI can show the button as already pressed.
+    reportCount: int
+    myReport: bool
+    myReason: Optional[str] = None
+
+
+class ReportedComment(BaseModel):
+    """One row of the moderation queue."""
+
+    commentId: str
+    threadId: str
+    authorMemberId: str
+    authorName: str
+    body: str
+    # A flagged comment that has already been removed stays in the queue, so
+    # a moderator can see the outcome rather than losing the record.
+    isDeleted: bool
+    reportCount: int
+    lastReportedUtc: datetime
