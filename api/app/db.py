@@ -123,9 +123,13 @@ def create_comment(scope: Scope, thread_id: str, body: str, parent_comment_id: s
     )
 
 
-def delete_comment(scope: Scope, comment_id: str):
-    return _exec_crud(scope, "dsc.dsc_Comment_CRUD_JSON", "DELETE", {"commentId": comment_id})
-
+def delete_comment(scope: Scope, thread_id: str, comment_id: str):
+    return _exec_crud(
+        scope,
+        "dsc.dsc_Comment_CRUD_JSON",
+        "DELETE",
+        {"threadId": thread_id, "commentId": comment_id},
+    )
 
 # --- votes ----------------------------------------------------------------
 

@@ -229,10 +229,14 @@ BEGIN
     END
     ELSE IF @Action = 'DELETE'
     BEGIN
+        DECLARE @DelThreadID char(32) = JSON_VALUE(@Payload, '$.threadId');
         DECLARE @DelCommentID char(32) = JSON_VALUE(@Payload, '$.commentId');
         DECLARE @Owner char(32) = (
             SELECT AuthorMemberID FROM dsc.dsc_Comment
-            WHERE TenantID = @TenantID AND CommentID = @DelCommentID AND IsDeleted = 0);
+            WHERE TenantID = @TenantID
+                AND ThreadID = @DelThreadID
+                AND CommentID = @DelCommentID
+                AND IsDeleted = 0);
 
         IF @Owner IS NULL
             THROW 50005, 'DSC_COMMENT_NOT_FOUND', 1;
@@ -241,7 +245,9 @@ BEGIN
 
         UPDATE dsc.dsc_Comment
         SET IsDeleted = 1, UpdatedUtc = sysutcdatetime()
-        WHERE TenantID = @TenantID AND CommentID = @DelCommentID;
+        WHERE TenantID = @TenantID
+            AND ThreadID = @DelThreadID
+            AND CommentID = @DelCommentID;
 
         SELECT @DelCommentID AS commentId, CAST(1 AS bit) AS deleted
         FOR JSON PATH, WITHOUT_ARRAY_WRAPPER;
