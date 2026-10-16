@@ -31,11 +31,12 @@ services:
         condition: service_healthy
     environment:
       SA_PASSWORD: ${SA_PASSWORD}
+      DB_BUILD_PATH: ${DB_BUILD_PATH:-no-rls}
     volumes:
-      - ./sql/init:/init:ro
+      - ./sql:/init:ro
     networks: [app_net]
     restart: "no"
-    entrypoint: /bin/bash -c "/opt/mssql-tools18/bin/sqlcmd -S sql -U sa -P \"$$SA_PASSWORD\" -C -b -i /init/init.sql"
+    entrypoint: /bin/bash -c "/opt/mssql-tools18/bin/sqlcmd -S sql -U sa -P \"$$SA_PASSWORD\" -C -b -i /init/$$DB_BUILD_PATH/build.sql"
 
   api:
     build:
@@ -50,6 +51,10 @@ services:
       SQL_DATABASE: DiscussionPoC
       SQL_USER: sa
       SQL_PASSWORD: ${SA_PASSWORD}
+      DSC_SECURITY_SIGNING_KEY_BASE64: ${DSC_SECURITY_SIGNING_KEY_BASE64}
+      DSC_SECURITY_ISSUER: dsc-standalone
+      DSC_SECURITY_AUDIENCE: dsc-widget
+      DSC_STANDALONE_ENABLED: "true"
     ports:
       - "8081:8080"
     networks: [app_net]
