@@ -382,6 +382,42 @@ END;
 GO
 
 -- ---------------------------------------------------------------------
+-- dsc.Comments_Update_JSON
+-- in : @TenantId, @MemberId (both from the caller's identity, never the body),
+--      @ThreadId, @CommentId, @Input = { "body": "..." }
+-- out: the updated comment
+-- err: 50001 bad JSON | 50002 body missing | 50004 not found | 50005 not the author
+-- ---------------------------------------------------------------------
+CREATE OR ALTER PROCEDURE dsc.Comments_Update_JSON
+    @TenantId UNIQUEIDENTIFIER, @MemberId UNIQUEIDENTIFIER,
+    @ThreadId UNIQUEIDENTIFIER, @CommentId UNIQUEIDENTIFIER, @Input NVARCHAR(MAX)
+AS
+BEGIN
+    SET NOCOUNT ON;
+    IF ISJSON(@Input) <> 1 THROW 50001, 'Input is not valid JSON.', 1;
+    DECLARE @Body NVARCHAR(MAX) = JSON_VALUE(@Input, '$.body');
+    IF @Body IS NULL OR LTRIM(RTRIM(@Body)) = '' THROW 50002, 'body is required.', 1;
+
+    DECLARE @Owner UNIQUEIDENTIFIER = (
+        SELECT AuthorMemberId FROM dsc.Comments
+        WHERE TenantId = @TenantId AND ThreadId = @ThreadId AND CommentId = @CommentId AND IsDeleted = 0
+    );
+
+    IF @Owner IS NULL THROW 50004, 'Comment not found in this thread.', 1;
+    IF @Owner <> @MemberId THROW 50005, 'Only the author can update their comment.', 1;
+
+    UPDATE dsc.Comments SET Body = @Body
+    WHERE TenantId = @TenantId AND ThreadId = @ThreadId AND CommentId = @CommentId AND IsDeleted = 0;
+
+    SELECT CommentId AS commentId, ThreadId AS threadId, TenantId AS tenantId,
+           AuthorMemberId AS authorMemberId, AuthorName AS authorName,
+           Body AS body, ParentCommentId AS parentCommentId, CreatedUtc AS createdUtc
+    FROM dsc.Comments WHERE TenantId = @TenantId AND CommentId = @CommentId
+    FOR JSON PATH, WITHOUT_ARRAY_WRAPPER, INCLUDE_NULL_VALUES;
+END;
+GO
+
+-- ---------------------------------------------------------------------
 -- dsc.CommentVote_Set_JSON
 -- in : @TenantId, @MemberId (both from the caller's identity, never the body),
 --      @CommentId, @Input = { "value": 1 | -1 | 0 }

@@ -60,7 +60,22 @@
       );
     }
 
-    function CommentRow({ comment, replies, onDelete, onVote, replyingTo, setReplyingTo, replyDraft, setReplyDraft, onReply }) {
+    // Shows the comment text, or an inline edit form while this comment is
+    // the one being edited.
+    function CommentContent({ c, edit }) {
+      if (edit.editingId === c.commentId) {
+        return (
+          <form className="reply-form" onSubmit={(e) => { e.preventDefault(); edit.saveEdit(c.commentId); }}>
+            <input type="text" value={edit.editDraft} onChange={(e) => edit.setEditDraft(e.target.value)} autoFocus />
+            <button type="submit" className="btn-add">Save</button>
+            <button type="button" className="btn-reply" onClick={edit.cancel}>Cancel</button>
+          </form>
+        );
+      }
+      return <div className="comment-body">{c.body}</div>;
+    }
+
+    function CommentRow({ comment, replies, onDelete, onVote, replyingTo, setReplyingTo, replyDraft, setReplyDraft, onReply, edit }) {
       const isReplying = replyingTo === comment.commentId;
       return (
         <div className="comment-row">
@@ -71,9 +86,14 @@
             </span>
             <span className="comment-time">{new Date(comment.createdUtc).toLocaleString()}</span>
           </div>
-          <div className="comment-body">{comment.body}</div>
+          <CommentContent c={comment} edit={edit} />
           <div className="comment-actions">
             <VoteButtons comment={comment} onVote={onVote} />
+            {comment.isOwn && (
+              <button className="btn-reply" onClick={() => edit.start(comment)}>
+                Edit
+              </button>
+            )}
             {comment.isOwn && (
               <button
                 className="btn-delete"
@@ -108,9 +128,14 @@
                     <span className="karma-badge">★ {r.authorKarma}</span>
                     <span className="comment-time">{new Date(r.createdUtc).toLocaleString()}</span>
                   </div>
-                  <div className="comment-body">{r.body}</div>
+                  <CommentContent c={r} edit={edit} />
                   <div className="comment-actions">
                     <VoteButtons comment={r} onVote={onVote} />
+                    {r.isOwn && (
+                      <button className="btn-reply" onClick={() => edit.start(r)}>
+                        Edit
+                      </button>
+                    )}
                     {r.isOwn && (
                       <button
                         className="btn-delete"
@@ -165,6 +190,12 @@
       const [error, setError] = useState(null);
       const [replyingTo, setReplyingTo] = useState(null);
       const [replyDraft, setReplyDraft] = useState("");
+      const [editingId, setEditingId] = useState(null);
+      const [editDraft, setEditDraft] = useState("");
+
+      // Switching "Viewing as" closes any open edit form, since the new
+      // member is not the author of the comment being edited.
+      useEffect(() => { setEditingId(null); }, [me]);
 
       useEffect(() => {
         fetch(`${API_BASE_URL}/members`)
@@ -251,6 +282,33 @@
           .catch((err) => setError(err.message));
       };
 
+      const saveEdit = (commentId) => {
+        if (!editDraft.trim()) return;
+        fetch(`${API_BASE_URL}/threads/${THREAD_ID}/comments/${commentId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", ...authHeaders(me) },
+          body: JSON.stringify({ body: editDraft }),
+        })
+          .then(async (res) => {
+            if (!res.ok) {
+              const b = await res.json().catch(() => ({}));
+              throw new Error(b.message || `PATCH failed: ${res.status}`);
+            }
+            return res.json();
+          })
+          .then(() => { setEditingId(null); setError(null); load(); })
+          .catch((err) => setError(err.message));
+      };
+
+      const edit = {
+        editingId, editDraft, setEditDraft, saveEdit,
+        start: (c) => {
+          setEditingId(c.commentId);
+          setEditDraft(c.body);
+        },
+        cancel: () => setEditingId(null),
+      };
+
       const topLevel = comments.filter((c) => !c.parentCommentId);
       const repliesByParent = {};
       for (const c of comments) {
@@ -292,6 +350,7 @@
                 replyDraft={replyDraft}
                 setReplyDraft={setReplyDraft}
                 onReply={(parentId) => postComment(replyDraft, parentId)}
+                edit={edit}
               />
             ))}
             {status === "ready" && comments.length === 0 && (
