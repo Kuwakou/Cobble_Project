@@ -626,7 +626,8 @@ GO
 -- ---------------------------------------------------------------------
 CREATE OR ALTER PROCEDURE dsc.CommentReport_Set_JSON
     @TenantId UNIQUEIDENTIFIER, @MemberId UNIQUEIDENTIFIER,
-    @CommentId UNIQUEIDENTIFIER, @Input NVARCHAR(MAX)
+    @ThreadId UNIQUEIDENTIFIER, @CommentId UNIQUEIDENTIFIER,
+    @Input NVARCHAR(MAX)
 AS
 BEGIN
     SET NOCOUNT ON; SET XACT_ABORT ON;
@@ -639,10 +640,13 @@ BEGIN
     DECLARE @Reason NVARCHAR(500) = @ReasonRaw;
 
     -- Tenant fence: a comment in another tenant is simply not found, so a
-    -- caller can neither flag foreign content nor confirm it exists.
+    -- caller can neither flag foreign content nor confirm it exists. The
+    -- thread is matched too, so the URL cannot assert a pairing that is
+    -- not true: a mismatched thread is treated the same as a missing comment.
     DECLARE @Author UNIQUEIDENTIFIER = (
         SELECT AuthorMemberId FROM dsc.Comments
-        WHERE TenantId = @TenantId AND CommentId = @CommentId AND IsDeleted = 0);
+        WHERE TenantId = @TenantId AND ThreadId = @ThreadId
+          AND CommentId = @CommentId AND IsDeleted = 0);
 
     IF @Author IS NULL THROW 50004, 'Comment not found.', 1;
 
@@ -697,7 +701,16 @@ BEGIN
            c.Body               AS body,
            c.IsDeleted          AS isDeleted,
            t.ReportCount        AS reportCount,
-           t.LastReportedUtc    AS lastReportedUtc
+           t.LastReportedUtc    AS lastReportedUtc,
+           reasons = (
+               SELECT r.ReporterMemberId AS reporterMemberId,
+                      r.Reason           AS reason,
+                      r.UpdatedUtc       AS reportedUtc
+               FROM dsc.CommentReports r
+               WHERE r.TenantId = c.TenantId AND r.CommentId = c.CommentId
+               ORDER BY r.UpdatedUtc DESC
+               FOR JSON PATH
+           )
     FROM dsc.Comments c
     CROSS APPLY (
         SELECT COUNT(*) AS ReportCount, MAX(r.UpdatedUtc) AS LastReportedUtc
