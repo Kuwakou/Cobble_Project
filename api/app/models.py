@@ -28,6 +28,10 @@ class CommentCreateRequest(BaseModel):
     parentCommentId: Optional[str] = None
 
 
+class CommentUpdateRequest(BaseModel):
+    body: str = Field(..., min_length=1)
+
+
 class VoteRequest(BaseModel):
     # 1 = like, -1 = dislike, 0 = clear my vote. Pressing an already-active
     # button sends 0, which is how the UI implements toggle-off.

@@ -10,6 +10,7 @@ from .identity import MEMBERS, current_tenant_id, resolve_member
 from .models import (
     Comment,
     CommentCreateRequest,
+    CommentUpdateRequest,
     DeleteResult,
     KarmaEntry,
     ReportedComment,
@@ -118,6 +119,47 @@ def create_comment(
     if not created:
         raise ApiError(500, "DB_ERROR", "Insert did not return a row.")
     return created
+
+
+@app.patch(
+    "/threads/{thread_id}/comments/{comment_id}",
+    response_model=Comment,
+    status_code=200,
+)
+def update_comment(
+    thread_id: UUID,
+    comment_id: UUID,
+    payload: CommentUpdateRequest,
+    x_member_id: str | None = Header(default=None),
+):
+    """
+    Edit the body of a comment. Only its author may do this; the database
+    refuses anyone else, so the rule holds no matter who calls the procedure.
+    """
+    tenant_id = current_tenant_id()
+    member_id, _ = resolve_member(x_member_id)
+    input_json = json.dumps({"body": payload.body})
+    try:
+        updated = db.update_comment(
+            tenant_id, member_id, str(thread_id), str(comment_id), input_json
+        )
+    except Exception as exc:
+        msg = str(exc)
+        if "50002" in msg:
+            raise ApiError(400, "VALIDATION", "body is required.") from exc
+        if "50004" in msg:
+            raise ApiError(
+                404, "NOT_FOUND", "Comment does not exist in this thread."
+            ) from exc
+        if "50005" in msg:
+            raise ApiError(
+                403, "FORBIDDEN", "Only the author can edit their comment."
+            ) from exc
+        log.exception("Update failed")
+        raise ApiError(500, "DB_ERROR", msg) from exc
+    if not updated:
+        raise ApiError(500, "DB_ERROR", "Update did not return a row.")
+    return updated
 
 
 @app.put(
