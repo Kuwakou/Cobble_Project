@@ -274,8 +274,8 @@ def delete_comment(
     status_code=200,
 )
 def report_comment(
-    thread_id: str,
-    comment_id: str,
+    thread_id: UUID,
+    comment_id: UUID,
     payload: ReportRequest,
     x_member_id: str | None = Header(default=None),
 ):
@@ -287,14 +287,20 @@ def report_comment(
     and is idempotent - sending it twice leaves the same single row with an
     updated reason, rather than inflating the count.
 
-    A member cannot flag their own comment, and cannot flag a comment in
-    another tenant. Both are refused by the database, not by this handler.
+    A member cannot flag their own comment, cannot flag a comment in
+    another tenant, and cannot flag a comment that does not belong to the
+    thread in the URL. All three are refused by the database, not by this
+    handler.
     """
     tenant_id = current_tenant_id()
     member_id, _ = resolve_member(x_member_id)
     try:
         result = db.set_comment_report(
-            tenant_id, member_id, comment_id, json.dumps({"reason": payload.reason})
+            tenant_id,
+            member_id,
+            str(thread_id),
+            str(comment_id),
+            json.dumps({"reason": payload.reason}),
         )
     except Exception as exc:
         msg = str(exc)

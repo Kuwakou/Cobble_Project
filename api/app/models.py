@@ -83,6 +83,12 @@ class ReportResult(BaseModel):
     myReport: bool
     myReason: Optional[str] = None
 
+class ReportReason(BaseModel):
+    """One member's reason for flagging a comment."""
+
+    reporterMemberId: str
+    reason: str
+    reportedUtc: datetime
 
 class ReportedComment(BaseModel):
     """One row of the moderation queue."""
@@ -97,3 +103,9 @@ class ReportedComment(BaseModel):
     isDeleted: bool
     reportCount: int
     lastReportedUtc: datetime
+
+    reportCount: int
+    lastReportedUtc: datetime
+    # Newest first. Kept alongside reportCount rather than replacing it: a
+    # client that only needs the number should not have to count a list.
+    reasons: list[ReportReason] = []

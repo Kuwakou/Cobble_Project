@@ -101,9 +101,12 @@ def update_comment(tenant_id: str, member_id: str, thread_id: str, comment_id: s
     )
 
 
-def set_comment_report(tenant_id: str, member_id: str, comment_id: str, body_json: str):
+def set_comment_report(
+    tenant_id: str, member_id: str, thread_id: str, comment_id: str, body_json: str
+):
     return _exec_json_proc(
-        "dsc.CommentReport_Set_JSON", (tenant_id, member_id, comment_id, body_json)
+        "dsc.CommentReport_Set_JSON",
+        (tenant_id, member_id, thread_id, comment_id, body_json),
     )
 
 
