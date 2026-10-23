@@ -4,7 +4,7 @@
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
-    { "key": "baseUrl", "value": "http://localhost:8080" },
+    { "key": "baseUrl", "value": "http://localhost:8081" },
     { "key": "threadId", "value": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" },
     { "key": "commentId", "value": "" }
   ],
